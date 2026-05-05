@@ -1,0 +1,18 @@
+tools:
+  apply_diff: true
+  read_file: true
+  ask_followup_question: true
+  attempt_completion: true
+  codebase_search: true
+  execute_command: true
+  function_replace: true
+  list_files: true
+  new_task: true
+  read_command_output: true
+  search_files: true
+  switch_mode: false
+  update_todo_list: true
+  write_to_file: true
+  mcp_context7_resolve_library_id: true
+  mcp_context7_query_docs: true
+  skill: false
