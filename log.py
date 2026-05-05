@@ -1,7 +1,6 @@
 # log.py
 import json
 import os
-import uuid
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -18,12 +17,6 @@ STATS_LOG = os.path.join(LOG_DIR, "request_stats.log")
 ERROR_LOG = os.path.join(LOG_DIR, "errors.log")
 RETRY_HISTORY_LOG = os.path.join(LOG_DIR, "retry_history.log")
 RETRY_FAILURES_LOG = os.path.join(LOG_DIR, "retry_failures.log")
-
-# Директории для индивидуальных файлов запросов и ответов
-REQUESTS_DIR = "requests"
-RESPONSES_DIR = "responses"
-os.makedirs(REQUESTS_DIR, exist_ok=True)
-os.makedirs(RESPONSES_DIR, exist_ok=True)
 
 
 def log_request(method: str, url: str, headers: dict, body: Optional[dict] = None):
@@ -284,95 +277,6 @@ def _write_log(filepath: str, data: Dict):
             f.write(json.dumps(data, ensure_ascii=False) + "\n")
     except Exception as e:
         print(f"[-] Ошибка записи в лог {filepath}: {e}")
-
-
-def _write_json_file(filepath: str, data: Dict):
-    """
-    Записывает данные в JSON файл (полностью перезаписывая файл).
-    
-    Args:
-        filepath: Путь к файлу
-        data: Данные для записи
-    """
-    try:
-        with open(filepath, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"[-] Ошибка записи в файл {filepath}: {e}")
-
-
-def save_request_to_file(method: str, url: str, headers: dict, body: Optional[dict] = None, prefix: str = "req") -> str:
-    """
-    Сохраняет запрос в отдельный JSON файл в директории requests/.
-    
-    Args:
-        method: HTTP метод
-        url: URL запроса
-        headers: Заголовки запроса
-        body: Тело запроса
-        prefix: Префикс имени файла (req/req_mod)
-        
-    Returns:
-        Имя созданного файла
-    """
-    timestamp = datetime.now()
-    filename = f"{prefix}_{timestamp.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}_request.json"
-    filepath = os.path.join(REQUESTS_DIR, filename)
-    
-    # Маскируем чувствительные заголовки
-    safe_headers = headers.copy()
-    if "authorization" in safe_headers:
-        safe_headers["authorization"] = "***"
-    if "api-key" in safe_headers:
-        safe_headers["api-key"] = "***"
-    
-    data = {
-        "timestamp": timestamp.isoformat(),
-        "method": method,
-        "url": url,
-        "headers": safe_headers,
-        "body": body
-    }
-    
-    _write_json_file(filepath, data)
-    return filename
-
-
-def save_response_to_file(model: str, full_response: dict, duration: float,
-                         response_type: str = "ORIGINAL", is_stream: bool = False,
-                         status_code: int = 200, prefix: str = "resp") -> str:
-    """
-    Сохраняет ответ в отдельный JSON файл в директории responses/.
-    
-    Args:
-        model: Название модели
-        full_response: Полный ответ (dict)
-        duration: Длительность запроса в секундах
-        response_type: Тип ответа (ORIGINAL/PROCESSED)
-        is_stream: Был ли запрос streaming
-        status_code: HTTP статус код
-        prefix: Префикс имени файла
-        
-    Returns:
-        Имя созданного файла
-    """
-    timestamp = datetime.now()
-    filename = f"{prefix}_{timestamp.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}_response.json"
-    filepath = os.path.join(RESPONSES_DIR, filename)
-    
-    data = {
-        "timestamp": timestamp.isoformat(),
-        "model": model,
-        "response_type": response_type,
-        "is_stream": is_stream,
-        "status_code": status_code,
-        "duration": round(duration, 3),
-        "response": full_response
-    }
-    
-    _write_json_file(filepath, data)
-    return filename
-
 
 
 def cleanup_logs(backup: bool = True):

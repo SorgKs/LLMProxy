@@ -12,7 +12,7 @@ import os
 import atexit
 import traceback
 from answers import AnswerProcessor, ArgumentParseError
-from log import log_request, log_modified_request, log_response, log_tool_calls, log_validation_error, log_retry_attempt, log_stats, cleanup_logs, check_log_files, get_logs_summary, save_request_to_file, save_response_to_file
+from log import log_request, log_modified_request, log_response, log_tool_calls, log_validation_error, log_retry_attempt, log_stats, cleanup_logs, check_log_files, get_logs_summary
 
 # Load environment variables
 try:
@@ -417,22 +417,10 @@ async def proxy_chat_completions(request: Request):
         headers=headers
     )
     
-    # ✅ СОХРАНЕНИЕ ИСХОДНОГО ЗАПРОСА В ФАЙЛ
-    try:
-        save_request_to_file(
-            method=request.method,
-            url=str(request.url),
-            headers=headers,
-            body=body,
-            prefix="req"
-        )
-    except Exception as e:
-        print(f"⚠️ Ошибка сохранения запроса в файл: {e}")
+    # 📤 Вывод информации о запросе
+    body_json = json.dumps(modified_body)
+    print(f"{datetime.now().isoformat()} | request | len={len(body_json)} | execute_command | NOT_FIXED")
     
-    # Проверяем, были ли изменения
-    request_changed = getattr(request_processor, 'changed', False)
-    print(f"{datetime.now().isoformat()} | request_modified | changed={request_changed}")
-
     # Получаем список доступных инструментов
     available_tools = []
     if "tools" in modified_body:
@@ -493,27 +481,80 @@ async def proxy_chat_completions(request: Request):
             status_code=answer.status_code
         )
         
-        # ✅ СОХРАНЕНИЕ ОРИГИНАЛЬНОГО ОТВЕТА В ФАЙЛ
-        try:
-            save_response_to_file(
-                model=answer.model,
-                full_response=answer.full_response,
-                duration=answer.duration,
-                response_type="ORIGINAL",
-                is_stream=answer.is_stream,
-                status_code=answer.status_code,
-                prefix="resp_orig"
-            )
-        except Exception as e:
-            print(f"⚠️ Ошибка сохранения оригинального ответа в файл: {e}")
-        
         # Устанавливаем workspace_path если есть
         if hasattr(request_processor, 'workspace_path'):
             answer.workspace_path = request_processor.workspace_path
         
         # ✅ ОБРАБОТКА ОТВЕТА (исправление форматирования и т.д.)
         try:
-            answer_processor.process(answer)
+            process_result = answer_processor.process(answer, request_body=current_body)
+            
+            # Обработка действия от процессора
+            if isinstance(process_result, dict):
+                action = process_result.get("action")
+                
+                if action == "request_file":
+                    # Нужно отправить read_file клиенту
+                    path = process_result.get("path")
+                    fn_name = process_result.get("function_name", "unknown")
+                    new_code = process_result.get("new_code", "")
+                    
+                    # Сохраняем function_replace в ожидании file read
+                    # Формируем сообщение с read_file для клиента
+                    read_file_tc = {
+                        "id": f"call_req_file_{int(time.time() * 1000)}",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": json.dumps({
+                                "path": path,
+                                "offset": 1,
+                                "mode": "slice"
+                            })
+                        }
+                    }
+                    
+                    # Заменяем tool_calls на read_file
+                    answer.tool_calls = [read_file_tc]
+                    
+                    # Сохраняем context для следующей итерации
+                    if not hasattr(answer_processor, '_pending_function_replace'):
+                        answer_processor._pending_function_replace = {}
+                    answer_processor._pending_function_replace[path] = {
+                        "function_name": fn_name,
+                        "new_code": new_code,
+                        "request_body": current_body
+                    }
+                    
+                    # Перезаписываем full_response чтобы client получил read_file
+                    answer.full_response["choices"][0]["message"]["tool_calls"] = [read_file_tc]
+                    
+                    # Логируем
+                    print(f"      ⏳ function_replace: файл {path} недоступен, запрошен read_file")
+                    
+                elif action == "replace_with_apply_diff":
+                    # Успешно сгенерирован apply_diff - заменяем tool call
+                    tool_call = process_result.get("tool_call")
+                    diff_text = process_result.get("diff", "")
+                    path = process_result.get("path", "")
+                    
+                    # Очищаем ожидающие (если были)
+                    if hasattr(answer_processor, '_pending_function_replace'):
+                        answer_processor._pending_function_replace.pop(path, None)
+                    
+                    # Заменяем tool_calls
+                    answer.tool_calls = [tool_call]
+                    
+                    # Перезаписываем full_response
+                    answer.full_response["choices"][0]["message"]["tool_calls"] = [tool_call]
+                    
+                    # Логируем
+                    print(f"      ✅ function_replace: конвертирован в apply_diff для {path}")
+            
+            # Если process вернул None, продолжаем как обычно
+            elif process_result is None:
+                pass
+                
         except ArgumentParseError as e:
             # Ошибка парсинга аргументов - не исправили, отдаём как есть
             _log_parse_error(e, answer)
@@ -569,27 +610,6 @@ async def proxy_chat_completions(request: Request):
     if final_answer is None:
         final_answer = answer
     
-    # Фильтруем невалидные tool calls перед отправкой клиенту
-    # (например, если LLM вернул tool calls, которых нет в списке доступных)
-    if final_answer.tool_calls and available_tools:
-        original_tool_calls = final_answer.tool_calls.copy()
-        valid_tool_calls = [
-            tc for tc in final_answer.tool_calls
-            if tc.get('function', {}).get('name', '') in available_tools
-        ]
-        
-        removed_count = len(original_tool_calls) - len(valid_tool_calls)
-        if removed_count > 0:
-            final_answer.tool_calls = valid_tool_calls
-            print(f"⚠️ Отфильтровано {removed_count} невалидных tool call(s) (недоступны в config/tools.yaml)")
-            
-            # Обновляем full_response чтобы синхронизировать с tool_calls
-            if final_answer.tool_calls:
-                final_answer.full_response['choices'][0]['message']['tool_calls'] = final_answer.tool_calls
-            else:
-                # Удаляем поле tool_calls, если не осталось валидных вызовов
-                final_answer.full_response['choices'][0]['message'].pop('tool_calls', None)
-    
     # Логируем финальный ответ
     log_response(
         model=final_answer.model,
@@ -600,27 +620,17 @@ async def proxy_chat_completions(request: Request):
         status_code=final_answer.status_code
     )
     
-    # ✅ СОХРАНЕНИЕ ФИНАЛЬНОГО ОТВЕТА В ФАЙЛ
-    try:
-        save_response_to_file(
-            model=final_answer.model,
-            full_response=final_answer.full_response,
-            duration=final_answer.duration,
-            response_type="PROCESSED",
-            is_stream=is_stream,
-            status_code=final_answer.status_code,
-            prefix="resp"
-        )
-    except Exception as e:
-        print(f"⚠️ Ошибка сохранения ответа в файл: {e}")
-    
     response_json = json.dumps(final_answer.full_response)
     tool_calls_count = len(final_answer.tool_calls) if hasattr(final_answer, 'tool_calls') else 0
     was_fixed = hasattr(answer_processor, 'changed') and answer_processor.changed
     
     tool_calls_info = ""
     if tool_calls_count > 0:
-        tool_calls_info = f" | tool_calls={tool_calls_count}"
+        tool_call_names = ",".join(
+            tc.get("function", {}).get("name", "")
+            for tc in getattr(final_answer, "tool_calls", [])
+        )
+        tool_calls_info = f" | {tool_call_names}"
         if was_fixed:
             tool_calls_info += " | FIXED"
         else:

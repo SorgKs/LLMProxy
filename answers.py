@@ -370,9 +370,6 @@ class AnswerProcessor:
         
         return json.dumps(serializable, ensure_ascii=False)
     
-    def _args_to_string(self, args_dict: dict) -> str:
-        """dict → JSON строка"""
-        return json.dumps(args_dict, ensure_ascii=False)
 
     def _extract_file_content_from_request(
         self, request_body: dict, target_path: str
@@ -1579,8 +1576,14 @@ class AnswerProcessor:
         
         return len(errors) == 0, errors
 
-    def process_single_tool_call(self, tc: dict, index: int) -> Tuple[bool, List[str]]:
-        """Обрабатывает один tool call. Модифицирует tc напрямую если были изменения."""
+    def process_single_tool_call(self, tc: dict, index: int, request_body: dict = None) -> Tuple[bool, List[str]]:
+        """Обрабатывает один tool call. Модифицирует tc напрямую если были изменения.
+        
+        Args:
+            tc: Tool call для обработки
+            index: Индекс tool call
+            request_body: Тело запроса для извлечения file_lines (опционально)
+        """
         
         if 'function' not in tc:
             raise ValueError(f"Tool call at index {index} missing 'function' field")
@@ -1638,18 +1641,22 @@ class AnswerProcessor:
             
             # 3а. Конвертация function_replace → apply_diff при возможности
             if tool_name == "function_replace":
-                # Пытаемся собрать содержимое файла
-                file_lines = []
                 path = parsed_args.get("path", "")
+                function_name = parsed_args.get("function", "")
+                new_code = parsed_args.get("code", "")
                 
-                # Сначала пробуем извлечь из существующих read_file вызовов
-                # (если есть кэшированное содержимое в контексте)
-                if hasattr(self, '_request_body') and self._request_body:
+                # Собираем file_lines из request_body если передан
+                file_lines = []
+                if request_body is not None:
+                    file_lines = self._extract_file_content_from_request(request_body, path)
+                
+                # Если нет в request_body, пробуем из внутреннего кэша
+                if not file_lines and hasattr(self, '_request_body') and self._request_body:
                     file_lines = self._extract_file_content_from_request(
                         self._request_body, path
                     )
                 
-                # Если не удалось собрать из read_file, пробуем прочитать файл напрямую
+                # Если не удалось из кэша, пробуем прочитать файл напрямую
                 if not file_lines and path and self.workspace_path:
                     full_path = os.path.join(self.workspace_path, path)
                     try:
@@ -1659,12 +1666,12 @@ class AnswerProcessor:
                     except (FileNotFoundError, OSError):
                         pass
                 
+                # Если файл есть, пробуем конвертировать
                 if file_lines:
-                    # Пробуем конвертировать
                     diff_result = self._convert_function_replace(
                         path=path,
-                        function_name=parsed_args.get("function", ""),
-                        new_code=parsed_args.get("code", ""),
+                        function_name=function_name,
+                        new_code=new_code,
                         file_lines=file_lines
                     )
                     if diff_result is not None:
@@ -1675,6 +1682,9 @@ class AnswerProcessor:
                         tc['function']['arguments'] = serialized_args
                         changed = True
                         changes.append("function_replace: конвертирован в apply_diff")
+                else:
+                    # Нет файла - нельзя конвертировать
+                    changes.append(f"function_replace: файл {path} недоступен, требуется read_file")
         
         except Exception as e:
             changes.append(f"❌ FIX ERROR for {tool_name}: {e}")
@@ -1688,11 +1698,23 @@ class AnswerProcessor:
         
         return False, changes
 
-    def process(self, answer) -> None:
-        """Обрабатывает ответ от LLM"""
+    def process(self, answer, request_body: dict = None) -> Optional[dict]:
+        """Обрабатывает ответ от LLM.
+        
+        Args:
+            answer: Объект Answer с ответом от LLM
+            request_body: Тело исходного запроса (для извлечения file_lines)
+            
+        Returns:
+            dict с action, если нужно выполнить дополнительное действие в proxy.py,
+            иначе None
+        """
         now = datetime.now().strftime("%H:%M:%S")
         self.reset()
-        self.changes_log.append("Answer process")
+        
+        # Сохраняем request_body для _extract_file_content_from_request
+        if request_body is not None:
+            self._request_body = request_body
         
         # Проверяем обязательные поля в answer
         if not hasattr(answer, 'full_response'):
@@ -1720,12 +1742,44 @@ class AnswerProcessor:
             status_code=answer.status_code
         )
         
+        # Сохраняем исходный ответ в responses/
+        self._save_original_response(answer)
+        
         # 1. Извлекаем tool calls из текста
         if self._extract_and_add_tool_calls(answer):
             self._was_changed = True
             self.changes_log.append("Извлечены tool calls из текста")
         
-        # 2. Обрабатываем каждый tool call отдельно (модифицируем tc на месте)
+        # 2. Проверяем есть ли function_replace без доступа к файлу
+        #    Если файла нет в request_body и нет прямого доступа - просим прочитать
+        if answer.tool_calls:
+            for i, tc in enumerate(answer.tool_calls):
+                func = tc.get('function', {})
+                if func.get('name') == 'function_replace':
+                    args = func.get('arguments', {})
+                    if isinstance(args, dict):
+                        path = args.get('path', '')
+                        function_name = args.get('function', '')
+                        new_code = args.get('code', '')
+                        
+                        # Пытаемся собрать file_lines
+                        file_lines = []
+                        if hasattr(self, '_request_body') and self._request_body:
+                            file_lines = self._extract_file_content_from_request(
+                                self._request_body, path
+                            )
+                        
+                        if not file_lines:
+                            # Файл не доступен - возвращаем действие для proxy.py
+                            return {
+                                "action": "request_file",
+                                "path": path,
+                                "function_name": function_name,
+                                "new_code": new_code,
+                                "original_tc": tc
+                            }
+        
+        # 3. Обрабатываем каждый tool call отдельно (модифицируем tc на месте)
         if answer.tool_calls:
             for i, tc in enumerate(answer.tool_calls):
                 changed, changes = self.process_single_tool_call(tc, i)
@@ -1747,12 +1801,11 @@ class AnswerProcessor:
                 
                 answer.full_response["choices"][0]["message"]["tool_calls"] = answer.tool_calls
         
-        # 3. Декодируем Unicode escape последовательности
+        # 4. Декодируем Unicode escape последовательности
         if self._was_changed:
             answer.full_response = self._decode_all_strings(answer.full_response)
-            self.changes_log.append("🌍 Декодированы Unicode escape последовательности")
         
-        # 4. Валидация всех tool calls
+        # 5. Валидация всех tool calls
         is_valid, validation_errors = self.validate_tool_calls(answer)
         if not is_valid:
             print(f"❌ Tool call validation failed: {validation_errors}")
@@ -1761,7 +1814,7 @@ class AnswerProcessor:
                 error_message = error.get('message')
                 print(f"   - {error_tool_name}: {error_message}")
         
-        # 5. Логируем результат
+        # 6. Логируем результат
         log_response(
             model=answer.model,
             full_response=json.dumps(answer.full_response, ensure_ascii=False, default=str),
@@ -1771,11 +1824,16 @@ class AnswerProcessor:
             status_code=200
         )
         
-        # 6. Выводим статистику
+        # 7. Выводим статистику
         if self._was_changed:
-            print(f"[{now}] 🔧 Tool calls исправлены: {len(self.changes_log)} изменений")
             for change in self.changes_log:
                 print(f"      - {change}")
+        
+        # Сохраняем модифицированный ответ в responses/ (если были изменения)
+        if self._was_changed:
+            self._save_modified_response(answer)
+        
+        return None
 
     def _prepare_retry_request(self, answer) -> None:
         """
@@ -1819,6 +1877,158 @@ class AnswerProcessor:
         # Сохраняем в answer для отправки
         answer.retry_prompt = retry_messages
     
+    def _args_to_dict(self, args_str: str, tool_name: str = "unknown", tool_call_id: str = "unknown") -> Dict[str, Any]:
+        """
+        Конвертирует Python-подобный текст аргументов в dict.
+        
+        Поддерживаемые форматы:
+        - JSON строка: '{"path": "file.py", "mode": "slice"}'
+        - Python-подобный: 'path="file.py", mode="slice"'
+        - Mixed: 'path="file.py", recursive=True'
+        
+        Returns:
+            Dict с распарсенными аргументами
+        """
+        if isinstance(args_str, dict):
+            return args_str
+        
+        if not isinstance(args_str, str):
+            raise ArgumentParseError(
+                f"Неверный тип аргументов: ожидается str или dict, получен {type(args_str)}",
+                tool_name=tool_name, tool_call_id=tool_call_id, original_args=str(args_str)
+            )
+        
+        args_str = args_str.strip()
+        if not args_str:
+            return {}
+        
+        # 1. Пробуем как JSON
+        try:
+            parsed = json.loads(args_str)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+        
+        # 2. Пробуем распарсить Python-подобный синтаксис: key=value, key2="value2"
+        result = {}
+        # Используем более надежную регулярку для парсинга параметров
+        # Находим все key=value пары, учитывая вложенные структуры в строках
+        remaining = args_str
+        while remaining.strip():
+            # Ищем имя параметра (слово с возможными подчеркиваниями и цифрами)
+            key_match = re.match(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*=', remaining.strip())
+            if not key_match:
+                raise ArgumentParseError(
+                    f"Невозможно распарсить аргументы: ожидается 'key=value', получено '{remaining[:50]}'",
+                    tool_name=tool_name, tool_call_id=tool_call_id, original_args=args_str
+                )
+            
+            key = key_match.group(1)
+            # Сдвигаем позицию после key=
+            pos = key_match.end()
+            rest = remaining.strip()[pos:]
+            
+            # Теперь нужно извлечь значение (до следующего "," или конца строки)
+            # Значение может быть: строкой, boolean, числом, или списком/словарем
+            value, consumed = self._parse_single_value(rest)
+            result[key] = value
+            
+            # Сдвигаем позицию
+            remaining = remaining.strip()[pos + consumed:].strip()
+            
+            # Пропускаем запятую, если есть
+            if remaining.startswith(','):
+                remaining = remaining[1:].strip()
+        
+        return result
+    
+    def _parse_single_value(self, text: str) -> tuple[Any, int]:
+        """
+        Парсит одиночное значение из начала строки.
+        
+        Returns:
+            (значение, количество_символов_прочитано)
+        """
+        text = text.lstrip()
+        if not text:
+            raise ValueError("Пустой текст для парсинга значения")
+        
+        # Строка в двойных кавычках
+        if text.startswith('"'):
+            # Ищем закрывающую кавычку, учитывая экранирование
+            i = 1
+            while i < len(text):
+                if text[i] == '\\':
+                    i += 2  # Пропускаем экранированный символ
+                    continue
+                if text[i] == '"':
+                    value = text[:i+1]
+                    # Декодируем строку (убираем кавычки и обрабатываем экранирование)
+                    try:
+                        parsed = json.loads(value)
+                        return parsed, i + 1
+                    except json.JSONDecodeError:
+                        # Если не получилось, возвращаем как есть (без кавычек)
+                        return value[1:i], i + 1
+                i += 1
+            raise ValueError(f"Незакрытая строка: {text[:50]}")
+        
+        # Строка в одинарных кавычках
+        if text.startswith("'"):
+            i = 1
+            while i < len(text):
+                if text[i] == '\\':
+                    i += 2
+                    continue
+                if text[i] == "'":
+                    value = text[1:i]
+                    return value, i + 1
+                i += 1
+            raise ValueError(f"Незакрытая строка: {text[:50]}")
+        
+        # Boolean или null
+        for lit in ('True', 'False', 'None'):
+            if text.startswith(lit):
+                if len(text) == len(lit) or not text[len(lit)].isalnum() and text[len(lit)] != '_':
+                    if lit == 'True':
+                        return True, len(lit)
+                    elif lit == 'False':
+                        return False, len(lit)
+                    elif lit == 'None':
+                        return None, len(lit)
+        
+        # Число (int или float)
+        num_match = re.match(r'(-?\d+\.?\d*)(?:[eE][+-]?\d+)?', text)
+        if num_match:
+            num_str = num_match.group(1)
+            try:
+                if '.' in num_str or 'e' in num_str.lower():
+                    return float(num_str), len(num_str)
+                else:
+                    return int(num_str), len(num_str)
+            except ValueError:
+                pass
+        
+        # Список или словарь (JSON-подобные)
+        if text.startswith('[') or text.startswith('{'):
+            try:
+                parsed = json.loads(text)
+                # Найти, где заканчивается этот JSON
+                import json as json_module
+                decoder = json_module.JSONDecoder()
+                obj, end = decoder.raw_decode(text)
+                return obj, end
+            except json.JSONDecodeError:
+                raise ValueError(f"Невалидный JSON: {text[:50]}")
+        
+        # Если ничего не подошло - это просто слово/идентификатор
+        word_match = re.match(r'([a-zA-Z_][a-zA-Z0-9_]*)', text)
+        if word_match:
+            return word_match.group(1), len(word_match.group(1))
+        
+        raise ValueError(f"Неизвестный формат значения: {text[:50]}")
+
     def _extract_and_add_tool_calls(self, answer) -> bool:
         if not answer.content or not isinstance(answer.content, str):
             return False
@@ -1834,14 +2044,16 @@ class AnswerProcessor:
             
             # Парсим в dict (для внутреннего использования)
             args_dict = self._args_to_dict(params_str)
-            
+            # Сериализуем в JSON строку, чтобы сохранять как string
+            args_str = self._serialize_arguments(args_dict)
+           
             answer.tool_calls.append({
-                "id": f"call_text_{int(time.time())}_{len(answer.tool_calls)}",
-                "type": "function",
-                "function": {
-                    "name": tool_name.strip(),
-                    "arguments": args_dict  # сохраняем как dict
-                }
+               "id": f"call_text_{int(time.time())}_{len(answer.tool_calls)}",
+               "type": "function",
+               "function": {
+                   "name": tool_name.strip(),
+                   "arguments": args_str  # сохраняем как JSON строку
+               }
             })
             
             found = True
@@ -1856,13 +2068,15 @@ class AnswerProcessor:
             params_str = match.group(2)
             
             args_dict = self._args_to_dict(params_str)
+            # Сериализуем в JSON строку
+            args_str = self._serialize_arguments(args_dict)
             
             answer.tool_calls.append({
                 "id": f"call_text_{int(time.time())}_{len(answer.tool_calls)}",
                 "type": "function",
                 "function": {
                     "name": tool_name.strip(),
-                    "arguments": args_dict
+                    "arguments": args_str
                 }
             })
             
@@ -1962,9 +2176,8 @@ class AnswerProcessor:
         
         old_diff = parsed_args["diff"]
         
-        if self._is_valid_format(old_diff):
-            return False
-        
+        # Если формат уже валидный, но в REPLACE-блоке могут быть лишние пустые строки,
+        # всё равно запускаем алгоритм для очистки
         new_diff = self._apply_diff_algorithm(old_diff, debug=debug)
         
         if new_diff and new_diff != old_diff:
@@ -2036,20 +2249,21 @@ class AnswerProcessor:
         separator_patterns = [
             # Исходные паттерны (чистые разделители)
             r'^={3,}$', r'^-{3,}$', r'^>{3,}$', r'^<{3,}$',
-            r'^\[={3,}\]$', r'^\[-{3,}\]$', r'^\[>{3,}\]$', r'^\[<{3,}\]$',
+            r'^[\[{]-{3,}[\]}]$', r'^[\[{]={3,}[\]}]$', r'^[\[{]>{3,}[\]}]$', r'^[\[{]<{3,}[\]}]$',
             
             # SEARCH маркеры
-            r'^\[SEARCH\]$', r'^\[SOURCE\]$', r'^\[SRC\]$',
+            r'^[\[\[{]+SEARCH[\]\]]+$', r'^[\[\[{]+SOURCE[\]\]]+$', r'^[\[\[{]+SRC[\]\]]+$',
             r'^SEARCH$', r'^SOURCE$', r'^SRC$',
             r'^<<<<<<< SEARCH$', r'^<<<<<<< SOURCE$', r'^<<<<<<< SRC$',
             
             # REPLACE маркеры
-            r'^\[REPLACE\]$', r'^REPLACE$', r'^=======$', r'^\[=======\]$',
+            r'^[\[\[{]+REPLACE[\]\]]+$', r'^REPLACE$', r'^=======$', r'^[\[\[{]+=======[\]\}]+$',
             
             # END маркеры (разное количество >)
             r'^>+ REPLACE$', r'^>+REPLACE$',
             r'^>>>>>>> REPLACE$', r'^>>>>>> REPLACE$', r'^>>>>>>>>>>>> REPLACE$'
         ]
+
         
         separator_indices = []
         for i, line in enumerate(lines):
@@ -2182,8 +2396,18 @@ class AnswerProcessor:
         
         if debug:
             print_step(step, "После замены разделителей на правильные")
-        
+        # Удаляем пустые строки в конце REPLACE блока
+        # (между 3-м и 4-м разделителями)
+        j = separator_indices[3] - 1
+        while j > separator_indices[2] and not lines[j].strip():
+            del lines[j]
+            separator_indices[3] -= 1
+            j -= 1
+            changed = True
+
+
         result = '\n'.join(lines)
+
         
         if debug:
             print("\n" + "="*60)
@@ -2193,139 +2417,7 @@ class AnswerProcessor:
             print("="*60 + "\n")
         
         return result if changed else diff_text
-    
-    def _process_source_marker(self, lines: List[str]) -> Optional[int]:
-        """Шаги 1-2: Поиск и нормализация source маркера"""
-        source_indices = []
-        for i, line in enumerate(lines):
-            for sig in self.source_signatures:
-                if re.match(sig, line.strip(), re.IGNORECASE):
-                    source_indices.append(i)
-                    break
-        
-        if source_indices:
-            first_source = source_indices[0]
-            lines[first_source] = '<<<<<<< SEARCH'
-            # Удаляем остальные source
-            for idx in reversed(source_indices[1:]):
-                del lines[idx]
-                if idx < first_source:
-                    first_source -= 1
-            return first_source
-        
-        # Шаг 2: Если source не найден, ищем по общей сигнатуре
-        for i, line in enumerate(lines):
-            for sig in self.common_signatures:
-                if re.match(sig, line.strip()):
-                    lines[i] = '<<<<<<< SEARCH'
-                    return i
-        
-        return None
-    
-    def _process_replace_marker(self, lines: List[str]) -> Optional[int]:
-        """Шаги 7-8: Поиск и нормализация replace маркера"""
-        replace_indices = []
-        for i, line in enumerate(lines):
-            for sig in self.replace_signatures:
-                if re.match(sig, line.strip(), re.IGNORECASE):
-                    replace_indices.append(i)
-                    break
-        
-        if replace_indices:
-            first_replace = replace_indices[0]
-            lines[first_replace] = '======='
-            # Удаляем остальные replace
-            for idx in reversed(replace_indices[1:]):
-                del lines[idx]
-            return first_replace
-        
-        # Шаг 8: Если replace не найден, ищем по общей сигнатуре
-        for i, line in enumerate(lines):
-            for sig in self.common_signatures:
-                if re.match(sig, line.strip()):
-                    lines[i] = '======='
-                    return i
-        
-        return None
-    
-    def _remove_common_around(self, lines: List[str], idx: int) -> int:
-        """Шаг 3 и 9: Удаляет общие сигнатуры подряд идущие с указанной позиции"""
-        # Удаляем ДО
-        i = idx - 1
-        while i >= 0:
-            is_common = False
-            for sig in self.common_signatures:
-                if re.match(sig, lines[i].strip()):
-                    del lines[i]
-                    idx -= 1
-                    is_common = True
-                    break
-            if not is_common:
-                break
-            i -= 1
-        
-        # Удаляем ПОСЛЕ
-        i = idx + 1
-        while i < len(lines):
-            is_common = False
-            for sig in self.common_signatures:
-                if re.match(sig, lines[i].strip()):
-                    del lines[i]
-                    is_common = True
-                    break
-            if not is_common:
-                break
-        
-        return idx
-    
-    def _remove_common_after(self, lines: List[str], start_idx: int):
-        """Шаг 6: Удаляет подряд идущие общие сигнатуры начиная с позиции"""
-        i = start_idx
-        while i < len(lines):
-            is_common = False
-            for sig in self.common_signatures:
-                if re.match(sig, lines[i].strip()):
-                    del lines[i]
-                    is_common = True
-                    break
-            if not is_common:
-                i += 1
-    
-    def _ensure_start_line(self, lines: List[str], source_idx: int):
-        """Шаг 4: Проверяет наличие :start_line: после source"""
-        # Ищем :start_line: в следующих строках
-        for i in range(source_idx + 1, len(lines)):
-            if re.search(r':start_line:\s*\d+', lines[i], re.IGNORECASE):
-                # Нормализуем формат
-                match = re.search(r':start_line:\s*(\d+)', lines[i], re.IGNORECASE)
-                lines[i] = f':start_line:{match.group(1)}'
-                return
-        
-        # Если не нашли, добавляем после source
-        lines.insert(source_idx + 1, ':start_line:1')
-        self.changes_log.append("apply_diff: добавлен :start_line:1 (значение по умолчанию)")
-    
-    def _ensure_separator(self, lines: List[str], start_idx: int) -> Optional[int]:
-        """Шаг 5: Ищет или добавляет разделитель -------"""
-        # Ищем первую общую сигнатуру
-        for i in range(start_idx, len(lines)):
-            for sig in self.common_signatures:
-                if re.match(sig, lines[i].strip()):
-                    lines[i] = '-------'
-                    return i
-        
-        # Если не нашли, добавляем
-        lines.insert(start_idx, '-------')
-        return start_idx
-    
-    def _ensure_end_marker(self, lines: List[str]):
-        """Шаг 10: Добавляет >>>>>>> REPLACE в конце если нет"""
-        for line in lines:
-            if re.match(r'^>>>>>>> REPLACE$', line.strip(), re.IGNORECASE):
-                return
-        
-        lines.append('>>>>>>> REPLACE')
-    
+
     def _normalize_indent(self, text: str, remove_all: bool = False, preserve_first_line: bool = False) -> str:
         """
         Нормализует отступы в тексте.
@@ -2370,20 +2462,48 @@ class AnswerProcessor:
                 result.append('')
         
         return '\n'.join(result)
-    
-    def _parse_params(self, params_str: str) -> dict:
-        """Парсит строку параметров в dict"""
+
+    def _save_original_response(self, answer) -> None:
+        """Сохраняет исходный ответ в файл responses/original_<timestamp>_<model>.json"""
         try:
-            return json.loads(params_str)
-        except:
-            pass
-        
-        # Простой парсинг для JSON-like строк
+            os.makedirs('responses', exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_model = answer.model.replace('/', '_').replace(':', '_')
+            filename = f"responses/original_{timestamp}_{safe_model}.json"
+            
+            data = {
+                "timestamp": datetime.now().isoformat(),
+                "model": answer.model,
+                "duration": answer.duration,
+                "is_stream": answer.is_stream,
+                "status_code": answer.status_code,
+                "full_response": answer.full_response
+            }
+            
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[-] Ошибка при сохранении исходного ответа: {e}")
+
+    def _save_modified_response(self, answer) -> None:
+        """Сохраняет модифицированный ответ в файл responses/modified_<timestamp>_<model>.json"""
         try:
-            # Заменяем одинарные кавычки на двойные
-            fixed = params_str.replace("'", '"')
-            return json.loads(fixed)
-        except:
-            pass
-        
-        return {"raw": params_str}
+            os.makedirs('responses', exist_ok=True)
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_model = answer.model.replace('/', '_').replace(':', '_')
+            filename = f"responses/modified_{timestamp}_{safe_model}.json"
+            
+            data = {
+                "timestamp": datetime.now().isoformat(),
+                "model": answer.model,
+                "duration": answer.duration,
+                "is_stream": answer.is_stream,
+                "status_code": answer.status_code,
+                "full_response": answer.full_response,
+                "changes_log": self.changes_log
+            }
+            
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"[-] Ошибка при сохранении модифицированного ответа: {e}")
