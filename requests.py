@@ -809,11 +809,11 @@ class RequestProcessor:
         return modified_body
 
     def _save_original_request(self, body: dict, method: str, url: str, headers: dict) -> None:
-        """Сохраняет исходный запрос в файл responses/original_request_<timestamp>.json"""
+        """Сохраняет исходный запрос в файл requests/original_request_<timestamp>.json"""
         try:
-            os.makedirs('responses', exist_ok=True)
+            os.makedirs('requests', exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"responses/original_request_{timestamp}.json"
+            filename = f"requests/original_request_{timestamp}.json"
             
             data = {
                 "timestamp": datetime.now().isoformat(),
@@ -829,11 +829,11 @@ class RequestProcessor:
             print(f"[-] Ошибка при сохранении исходного запроса: {e}")
 
     def _save_modified_request(self, modified_body: dict, modifications: List[str], method: str, url: str, headers: dict) -> None:
-        """Сохраняет модифицированный запрос в файл responses/modified_request_<timestamp>.json"""
+        """Сохраняет модифицированный запрос в файл requests/modified_request_<timestamp>.json"""
         try:
-            os.makedirs('responses', exist_ok=True)
+            os.makedirs('requests', exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"responses/modified_request_{timestamp}.json"
+            filename = f"requests/modified_request_{timestamp}.json"
             
             data = {
                 "timestamp": datetime.now().isoformat(),

@@ -417,14 +417,13 @@ async def proxy_chat_completions(request: Request):
         headers=headers
     )
     
-    # 📤 Вывод информации о запросе
-    body_json = json.dumps(modified_body)
-    print(f"{datetime.now().isoformat()} | request | len={len(body_json)} | execute_command | NOT_FIXED")
-    
     # Получаем список доступных инструментов
     available_tools = []
     if "tools" in modified_body:
         available_tools = [tool.get("function", {}).get("name", "") for tool in modified_body["tools"]]
+    
+    # 📤 Вывод информации о запросе (метаданные) + файл (полный контент)
+    print(f"{datetime.now().isoformat()} | request | model={model} | stream={is_stream} | tools={len(available_tools)}")
     
     # Настройки self-correction
     max_corrections = 2
@@ -471,7 +470,7 @@ async def proxy_chat_completions(request: Request):
                 media_type="application/json"
             )
         
-        # Логируем оригинальный ответ через log.py
+        # Логируем оригинальный ответ через log.py (файл) + консоль (метаданные)
         log_response(
             model=answer.model,
             full_response=json.dumps(answer.full_response),
@@ -480,6 +479,7 @@ async def proxy_chat_completions(request: Request):
             is_stream=answer.is_stream,
             status_code=answer.status_code
         )
+        print(f"{datetime.now().isoformat()} | response | model={answer.model} | status={answer.status_code} | duration={answer.duration:.2f}s | stream={answer.is_stream}")
         
         # Устанавливаем workspace_path если есть
         if hasattr(request_processor, 'workspace_path'):
@@ -529,9 +529,6 @@ async def proxy_chat_completions(request: Request):
                     # Перезаписываем full_response чтобы client получил read_file
                     answer.full_response["choices"][0]["message"]["tool_calls"] = [read_file_tc]
                     
-                    # Логируем
-                    print(f"      ⏳ function_replace: файл {path} недоступен, запрошен read_file")
-                    
                 elif action == "replace_with_apply_diff":
                     # Успешно сгенерирован apply_diff - заменяем tool call
                     tool_call = process_result.get("tool_call")
@@ -547,9 +544,6 @@ async def proxy_chat_completions(request: Request):
                     
                     # Перезаписываем full_response
                     answer.full_response["choices"][0]["message"]["tool_calls"] = [tool_call]
-                    
-                    # Логируем
-                    print(f"      ✅ function_replace: конвертирован в apply_diff для {path}")
             
             # Если process вернул None, продолжаем как обычно
             elif process_result is None:
@@ -581,13 +575,8 @@ async def proxy_chat_completions(request: Request):
         
         if correction_attempt > max_corrections:
             # Лимит исчерпан - отдаём ответ как есть (с невалидными tool calls)
-            print(f"⚠️ Max corrections ({max_corrections}) exceeded, returning response with invalid tools")
             final_answer = answer
             break
-        
-        # Формируем НОВЫЙ запрос с сообщением об ошибке
-        print(f"🔄 Self-correction attempt {correction_attempt}/{max_corrections}")
-        print(f"   Invalid tools: {[t['tool_name'] for t in invalid_tools]}")
         
         current_body = request_processor.build_correction_request(
             current_body,
@@ -595,7 +584,7 @@ async def proxy_chat_completions(request: Request):
             available_tools
         )
         
-        # Логируем correction запрос через log_modified_request
+        # Логируем correction запрос через log_modified_request (файл) + консоль (метаданные)
         log_modified_request(
             method=request.method,
             url=str(request.url),
@@ -603,6 +592,7 @@ async def proxy_chat_completions(request: Request):
             body=current_body,
             modifications=[f"self-correction attempt {correction_attempt}: added error message for invalid tools"]
         )
+        print(f"{datetime.now().isoformat()} | correction | attempt={correction_attempt} | invalid_tools={len(invalid_tools)}")
         
         # Продолжаем цикл с новым запросом
     
@@ -610,7 +600,7 @@ async def proxy_chat_completions(request: Request):
     if final_answer is None:
         final_answer = answer
     
-    # Логируем финальный ответ
+    # Логируем финальный ответ (файл) + консоль (метаданные)
     log_response(
         model=final_answer.model,
         full_response=json.dumps(final_answer.full_response),
@@ -619,27 +609,7 @@ async def proxy_chat_completions(request: Request):
         is_stream=is_stream,
         status_code=final_answer.status_code
     )
-    
-    response_json = json.dumps(final_answer.full_response)
-    tool_calls_count = len(final_answer.tool_calls) if hasattr(final_answer, 'tool_calls') else 0
-    was_fixed = hasattr(answer_processor, 'changed') and answer_processor.changed
-    
-    tool_calls_info = ""
-    if tool_calls_count > 0:
-        tool_call_names = ",".join(
-            tc.get("function", {}).get("name", "")
-            for tc in getattr(final_answer, "tool_calls", [])
-        )
-        tool_calls_info = f" | {tool_call_names}"
-        if was_fixed:
-            tool_calls_info += " | FIXED"
-        else:
-            tool_calls_info += " | NOT_FIXED"
-    
-    if correction_attempt > 0:
-        tool_calls_info += f" | corrections={correction_attempt}"
-    
-    print(f"{datetime.now().isoformat()} | response status={final_answer.status_code} | len={len(response_json)}{tool_calls_info}")
+    print(f"{datetime.now().isoformat()} | response | model={final_answer.model} | status={final_answer.status_code} | duration={final_answer.duration:.2f}s | stream={is_stream} | type=PROCESSED")
     
     return Response(
         content=json.dumps(final_answer.full_response),
