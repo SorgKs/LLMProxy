@@ -1,0 +1,83 @@
+# request.yaml - Элементы запроса
+
+- core_components:
+    path: "messages[0].content"
+    children:
+      message:
+        True: true
+        path: "messages[?role=user].content"
+      system_prompt:
+        True: true
+        path: "messages[?role=system].content"
+      tools:
+        path: "tools"
+        children:
+          apply_diff:
+            True: true
+            path: "tools[?function.name=apply_diff]"
+          read_file:
+            True: true
+            path: "tools[?function.name=read_file]"
+          ask_followup_question:
+            True: true
+            path: "tools[?function.name=ask_followup_question]"
+          attempt_completion:
+            True: true
+            path: "tools[?function.name=attempt_completion]"
+          codebase_search:
+            True: true
+            path: "tools[?function.name=codebase_search]"
+          execute_command:
+            True: true
+            path: "tools[?function.name=execute_command]"
+          function_replace:
+            True: true
+            path: "tools[?function.name=function_replace]"
+          list_files:
+            True: true
+            path: "tools[?function.name=list_files]"
+          new_task:
+            True: true
+            path: "tools[?function.name=new_task]"
+          read_command_output:
+            True: true
+            path: "tools[?function.name=read_command_output]"
+          search_files:
+            True: true
+            path: "tools[?function.name=search_files]"
+          switch_mode:
+            True: true
+            path: "tools[?function.name=switch_mode]"
+          update_todo_list:
+            True: true
+            path: "tools[?function.name=update_todo_list]"
+          write_to_file:
+            True: true
+            path: "tools[?function.name=write_to_file]"
+          mcp_context7_resolve_library_id:
+            True: true
+            path: "tools[?function.name=mcp--context7--resolve-library-id]"
+          mcp_context7_query_docs:
+            True: true
+            path: "tools[?function.name=mcp--context7--query-docs]"
+
+- request_parameters:
+    children:
+      stream:
+        True: true
+        path: "stream"
+      stream_options:
+        True: true
+        path: "stream_options"
+      tool_choice:
+        True: true
+        path: "tool_choice"
+      max_tokens:
+        True: true
+        path: "max_tokens"
+      temperature:
+        True: true
+        path: "temperature"
+      model:
+        True: true
+        path: "model"

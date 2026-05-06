@@ -1,0 +1,23 @@
+# Лог файл очищен при запуске 2026-02-14 16:35:36
+
+========================================================================================================================
+[2026-02-14 13:35:48.468] ORIGINAL RESPONSE | model=code | duration=7.02s | stream=True | status=200
+========================================================================================================================
+
+📦 FULL ORIGINAL RESPONSE:
+────────────────────────────────────────────────────────────────────────────────
+{"id": "gen-1771076141-1OnqXIzGueJlPa5U5Fjj", "object": "chat.completion", "created": 1771076141, "model": "code", "choices": [{"index": 0, "message": {"role": "assistant", "content": "", "tool_calls": [{"id": "chatcmpl-tool-834caf38a5ba5a32", "type": "function", "function": {"name": "apply_diff", "arguments": "{\"path\": \"requests.py\", \"diff\": \">>>>>> REPLACE\\n    def _optimize_tools(self, request_body: Dict[str, Any]) -> bool:\\n        ...\\n        # \u041e\u043f\u0442\u0438\u043c\u0438\u0437\u0438\u0440\u0443\u0435\u043c switch_mode\\n        elif tool_name == \\\"switch_mode\\\":\\n            # \u0423\u0434\u0430\u043b\u044f\u0435\u043c switch_mode \u0434\u043b\u044f \u0432\u0441\u0435\u0445 \u0440\u0435\u0436\u0438\u043c\u043e\u0432 \u043a\u0440\u043e\u043c\u0435 orchestartor\\n            if \\\"parameters\\\" in func and isinstance(func[\\\"parameters\\\"], dict):\\n                params = func[\\\"parameters\\\"]\\n                if \\\"properties\\\" in params and \\\"mode_slug\\\" in params[\\\"properties\\\"]:\\n                    params[\\\"properties\\\"][\\\"mode_slug\\\"][\\\"description\\\"] = \\\"Slug of the mode to switch to (e.g., code, ask, architect)\\\"\\n                    del params[\\\"properties\\\"][\\\"mode_slug\\\"]\\n                    modified = True\\n                    self.changes_log.append(\\\"\\\\u2705 \u0423\u0434\u0430\u043b\u0435\u043d switch_mode \u0434\u043b\u044f \u0432\u0441\u0435\u0445 \u0440\u0435\u0436\u0438\u043c\u043e\u0432 \u043a\u0440\u043e\u043c\u0435 orchestartor\\\")\"}"}}]}, "finish_reason": "tool_calls"}], "usage": {"completion_tokens": 283, "prompt_tokens": 9262, "total_tokens": 9545, "completion_tokens_details": {"reasoning_tokens": 0}}}
+
+========================================================================================================================
+
+
+========================================================================================================================
+[2026-02-14 13:35:52.398] ORIGINAL RESPONSE | model=code | duration=3.05s | stream=True | status=200
+========================================================================================================================
+
+📦 FULL ORIGINAL RESPONSE:
+────────────────────────────────────────────────────────────────────────────────
+{"id": "gen-1771076149-Zz1YOf32KzDwJPaThvnB", "object": "chat.completion", "created": 1771076149, "model": "code", "choices": [{"index": 0, "message": {"role": "assistant", "content": "", "tool_calls": [{"id": "chatcmpl-tool-9909543b38e18d27", "type": "function", "function": {"name": "ask_followup_question", "arguments": "{\"question\": \"What is the correct diff format for the apply_diff tool?\", \"follow_up\": [{\"text\": \"The diff format should include the SEARCH, =======, and REPLACE sections with correct markers on new lines.\", \"mode\": null}]}"}}]}, "finish_reason": "tool_calls"}], "usage": {"completion_tokens": 69, "prompt_tokens": 15278, "total_tokens": 15347, "completion_tokens_details": {"audio_tokens": 0, "reasoning_tokens": 0}, "prompt_tokens_details": {"audio_tokens": 0, "cached_tokens": 0}}}
+
+========================================================================================================================
+
