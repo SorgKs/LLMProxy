@@ -11,6 +11,7 @@ generated/
 output/
 
 # Python
+temp/
 __pycache__/
 *.py[cod]
 *$py.class
