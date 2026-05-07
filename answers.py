@@ -493,6 +493,44 @@ class AnswerProcessor:
 
         return full_content
 
+    def _extract_content_from_data(self, path: str) -> List[str]:
+        """
+        Извлекает содержимое файла из data-параметра.
+
+        Args:
+            path: Путь к файлу, для которого нужен контент.
+
+        Returns:
+            Список строк файла, где индекс = номер строки ‑ 1.
+            Пустой список, если данных нет или не подходят.
+        """
+        if not hasattr(self, '_request_data') or not self._request_data:
+            return []
+        
+        data = self._request_data
+        if not isinstance(data, dict):
+            return []
+        
+        if data.get("type") != "file_content":
+            return []
+        
+        if data.get("path") != path:
+            return []
+        
+        content = data.get("content")
+        if content is None:
+            return []
+        
+        if isinstance(content, str):
+            lines = content.split("\n")
+            while lines and lines[-1] == "":
+                lines.pop()
+            return lines
+        elif isinstance(content, list):
+            return [str(l) for l in content]
+        
+        return []
+
     def _detect_full_function_presence(
         self,
         file_lines: List[str],
@@ -1774,12 +1812,14 @@ class AnswerProcessor:
         
         return False, changes
 
-    def process(self, answer, request_body: dict = None) -> Optional[dict]:
+    def process(self, answer, request_body: dict = None, data: dict = None) -> Optional[dict]:
         """Обрабатывает ответ от LLM.
         
         Args:
             answer: Объект Answer с ответом от LLM
             request_body: Тело исходного запроса (для извлечения file_lines)
+            data: Дополнительные данные, переданные из proxy.py
+                  Формат: {"type": "file_content", "path": "...", "content": "..."}
             
         Returns:
             dict с action, если нужно выполнить дополнительное действие в proxy.py,
@@ -1788,9 +1828,11 @@ class AnswerProcessor:
         now = datetime.now().strftime("%H:%M:%S")
         self.reset()
         
-        # Сохраняем request_body для _extract_file_content_from_request
+        # Сохраняем request_body и data для извлечения контента
         if request_body is not None:
             self._request_body = request_body
+        if data is not None:
+            self._request_data = data
         
         # Проверяем обязательные поля в answer
         if not hasattr(answer, 'full_response'):
@@ -1816,8 +1858,7 @@ class AnswerProcessor:
             status_code=answer.status_code
         )
         
-        # Сохраняем исходный ответ в responses/
-        self._save_original_response(answer, tools=list(self.tools_config.keys()))
+        # Сохранение оригинального ответа теперь происходит в proxy.py (save_responce)
         
         # 1. Извлекаем tool calls из текста
         if self._extract_and_add_tool_calls(answer):
@@ -1842,6 +1883,10 @@ class AnswerProcessor:
                             file_lines = self._extract_file_content_from_request(
                                 self._request_body, path
                             )
+                        
+                        # Если нет file_lines, пробуем из data-параметра
+                        if not file_lines and hasattr(self, '_request_data') and self._request_data:
+                            file_lines = self._extract_content_from_data(path)
                         
                         if not file_lines:
                             # Файл не доступен - возвращаем действие для proxy.py
@@ -1900,10 +1945,6 @@ class AnswerProcessor:
         if self._was_changed:
             for change in self.changes_log:
                 print(f"      - {change}")
-        
-        # Сохраняем модифицированный ответ в responses/ (если были изменения)
-        if self._was_changed:
-            self._save_modified_response(answer, tools=list(self.tools_config.keys()))
         
         return None
 
@@ -2535,47 +2576,4 @@ class AnswerProcessor:
         
         return '\n'.join(result)
 
-    def _save_original_response(self, answer, tools: List[str] = None) -> None:
-        """Сохраняет исходный ответ в файл responses/original_<timestamp>.json"""
-        try:
-            if tools is None:
-                tools = []
-            os.makedirs('responses', exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"responses/original_{timestamp}.json"
-            
-            data = {
-                "timestamp": datetime.now().isoformat(),
-                "tools": tools,
-                "duration": answer.duration,
-                "status_code": answer.status_code,
-                "full_response": answer.full_response
-            }
-            
-            with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[-] Ошибка при сохранении исходного ответа: {e}")
-
-    def _save_modified_response(self, answer, tools: List[str] = None) -> None:
-        """Сохраняет модифицированный ответ в файл responses/modified_<timestamp>.json"""
-        try:
-            if tools is None:
-                tools = []
-            os.makedirs('responses', exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"responses/modified_{timestamp}.json"
-            
-            data = {
-                "timestamp": datetime.now().isoformat(),
-                "tools": tools,
-                "duration": answer.duration,
-                "status_code": answer.status_code,
-                "full_response": answer.full_response,
-                "changes_log": self.changes_log
-            }
-            
-            with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[-] Ошибка при сохранении модифицированного ответа: {e}")
+    

@@ -9,7 +9,6 @@ LOG_DIR = "logs"
 os.makedirs(LOG_DIR, exist_ok=True)
 
 # Пути к файлам логов
-RESPONSE_LOG = os.path.join(LOG_DIR, "llm_responses.log")
 REQUEST_LOG = os.path.join(LOG_DIR, "requests.log")
 MODIFIED_REQUEST_LOG = os.path.join(LOG_DIR, "modified_requests.log")
 TOOL_CALLS_LOG = os.path.join(LOG_DIR, "tool_calls.log")
@@ -104,21 +103,9 @@ def log_response(full_response: str, duration: float,
         tools: Список доступных инструментов
         status_code: HTTP статус код
     """
-    timestamp = datetime.now().isoformat()
-    
-    if tools is None:
-        tools = []
-    
-    log_entry = {
-        "timestamp": timestamp,
-        "type": "llm_response",
-        "tools": tools,
-        "status_code": status_code,
-        "duration": round(duration, 3),
-        "response_preview": full_response
-    }
-    
-    _write_log(RESPONSE_LOG, log_entry)
+    # Сырые ответы больше не пишутся в llm_responses.log
+    # Файлы с полным контентом запросов и ответов пишутся отдельно
+    # (через _save_original_response и _save_modified_response)
     
     # Также логируем статистику
     log_stats(None, duration, status_code, None)
@@ -284,8 +271,8 @@ def cleanup_logs(backup: bool = True):
     Args:
         backup: Создавать ли бэкапы
     """
-    log_files = [RESPONSE_LOG, REQUEST_LOG, MODIFIED_REQUEST_LOG, 
-                 TOOL_CALLS_LOG, STATS_LOG, ERROR_LOG, 
+    log_files = [REQUEST_LOG, MODIFIED_REQUEST_LOG,
+                 TOOL_CALLS_LOG, STATS_LOG, ERROR_LOG,
                  RETRY_HISTORY_LOG, RETRY_FAILURES_LOG]
     
     archive_dir = os.path.join(LOG_DIR, "archive")
@@ -322,8 +309,8 @@ def cleanup_logs(backup: bool = True):
 
 def check_log_files():
     """Проверяет существование всех лог-файлов и создает их при необходимости"""
-    log_files = [RESPONSE_LOG, REQUEST_LOG, MODIFIED_REQUEST_LOG, 
-                 TOOL_CALLS_LOG, STATS_LOG, ERROR_LOG, 
+    log_files = [REQUEST_LOG, MODIFIED_REQUEST_LOG,
+                 TOOL_CALLS_LOG, STATS_LOG, ERROR_LOG,
                  RETRY_HISTORY_LOG, RETRY_FAILURES_LOG]
     
     print(f"\n📁 Директория логов существует: {LOG_DIR}")

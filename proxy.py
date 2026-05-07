@@ -31,7 +31,6 @@ app = FastAPI(title="LiteLLM Proxy — Full Response + Tool Calls Logging + Prox
 LITELLM_URL = os.getenv("LITELLM_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 TIMEOUT = httpx.Timeout(180.0, connect=15.0)
-print(f"4. LITELLM_URL={LITELLM_URL}, API_KEY={'SET' if OPENROUTER_API_KEY else 'NOT SET'}")
 
 class MaxRetriesExceededError(Exception):
     """Превышено максимальное количество retry при сбоях"""
@@ -180,6 +179,49 @@ def _log_fatal_error(error: Exception, answer, context: str) -> None:
         print(f"[-] Ошибка записи в файл: {e}")
 
 
+def _extract_file_content_from_read_file_calls(
+    answer: Answer,
+    target_path: Optional[str] = None
+) -> Optional[Dict[str, str]]:
+    """
+    Извлекает содержимое файла из read_file tool calls в ответе.
+
+    Когда proxy.py отправляет read_file клиенту, клиент отвечает тем же tool_call
+    но с заполненным полем content в аргументах. Эта функция сканирует tool_calls
+    в ответе и извлекает содержимое для заданного файла.
+
+    Args:
+        answer: Объект Answer с ответом от клиента
+        target_path: Путь к файлу, для которого нужен контент.
+                     Если None, возвращается контент для первого найденного файла.
+
+    Returns:
+        Словарь {"path": путь, "content": содержимое} или None, если ничего не найдено.
+    """
+    if not answer.tool_calls:
+        return None
+    
+    for tc in answer.tool_calls:
+        func = tc.get('function', {})
+        if func.get('name') != 'read_file':
+            continue
+        
+        args = func.get('arguments', {})
+        if not isinstance(args, dict):
+            continue
+        
+        path = args.get('path')
+        content = args.get('content')
+        
+        if not path or content is None:
+            continue
+        
+        if target_path is None or path == target_path:
+            return {"path": path, "content": content}
+    
+    return None
+
+
 # Инициализируем процессоры
 try:
     answer_processor = AnswerProcessor()
@@ -269,7 +311,8 @@ async def send_to_llm_with_retry(
                         "duration": duration,
                         "status_code": resp.status_code,
                         "is_error": True,
-                        "is_stream": False
+                        "is_stream": False,
+                        "headers": dict(resp.headers)
                     }
                 
                 data = json.loads(raw_response)
@@ -451,7 +494,26 @@ async def proxy_chat_completions(request: Request):
         
         # Обработка ошибок от LLM (не сетевых, а API ошибок)
         if collected_data.get("is_error"):
-            print(f"❌ LLM API error: status={collected_data.get('status_code')}")
+            status_code = collected_data.get('status_code')
+            error_detail = collected_data.get('full_response', {}).get('error', '')
+            error_headers = collected_data.get('headers', {})
+            
+            # Краткое описание ошибки из заголовков (не более 150 символов)
+            desc_parts = []
+            if error_headers.get('x-response-message'):
+                desc_parts.append(error_headers['x-response-message'][:150])
+            if error_headers.get('x-error-message'):
+                desc_parts.append(error_headers['x-error-message'][:150])
+            if error_headers.get('x-ratelimit-remaining'):
+                desc_parts.append(f"rate_limit={error_headers['x-ratelimit-remaining']}")
+            if error_detail:
+                desc_parts.append(str(error_detail)[:150])
+            
+            desc = ' | '.join(desc_parts)
+            if desc:
+                print(f"❌ LLM API error: status={status_code} | {desc}")
+            else:
+                print(f"❌ LLM API error: status={status_code}")
             return create_error_response(collected_data, is_stream)
         
         # Создание Answer объекта
@@ -477,6 +539,9 @@ async def proxy_chat_completions(request: Request):
             tools=available_tools,
             status_code=answer.status_code
         )
+        
+        # Сохраняем оригинальный ответ в файл немедленно после получения
+        save_responce(modified=False, full_responce=answer.full_response)
         tools_list = ",".join([tc.get("function", {}).get("name", "") for tc in answer.tool_calls if "function" in tc])
         print(f"{datetime.now().isoformat()} | ANS | size={len(str(answer.full_response))} | status={answer.status_code} | {tools_list} | duration={answer.duration:.2f}s")
         
@@ -484,9 +549,27 @@ async def proxy_chat_completions(request: Request):
         if hasattr(request_processor, 'workspace_path'):
             answer.workspace_path = request_processor.workspace_path
         
+        # ✅ ПРОВЕРКА НА НАЛИЧИЕ read_file РЕЗУЛЬТАТОВ
+        data = None
+        read_file_result = _extract_file_content_from_read_file_calls(answer)
+        if read_file_result is not None:
+            path = read_file_result.get("path")
+            content = read_file_result.get("content")
+            # Проверяем, ожидался ли этот файл для function_replace
+            if hasattr(answer_processor, '_pending_function_replace') and path in answer_processor._pending_function_replace:
+                # Проверяем достаточность данных: если файл пуст/None - не передаем data,
+                # чтобы process() мог повторно запросить файл или вернуть ошибку
+                if content is not None and content != "":
+                    # Формируем data-параметр для process()
+                    data = {
+                        "type": "file_content",
+                        "path": path,
+                        "content": content
+                    }
+        
         # ✅ ОБРАБОТКА ОТВЕТА (исправление форматирования и т.д.)
         try:
-            process_result = answer_processor.process(answer, request_body=current_body)
+            process_result = answer_processor.process(answer, request_body=current_body, data=data)
             
             # Обработка действия от процессора
             if isinstance(process_result, dict):
@@ -606,6 +689,10 @@ async def proxy_chat_completions(request: Request):
         tools=available_tools,
         status_code=final_answer.status_code
     )
+    
+    # Сохраняем модифицированный ответ
+    save_responce(modified=True, full_responce=final_answer.full_response)
+    
     tools_list = ",".join([tc.get("function", {}).get("name", "") for tc in final_answer.tool_calls if "function" in tc])
     print(f"{datetime.now().isoformat()} | ANS | size={len(str(final_answer.full_response))} | status={final_answer.status_code} | {tools_list} | duration={final_answer.duration:.2f}s")
     
@@ -614,6 +701,20 @@ async def proxy_chat_completions(request: Request):
         status_code=final_answer.status_code,
         media_type="application/json"
     )
+
+
+def save_responce(modified: bool, full_responce: Dict[str, Any]) -> None:
+    """Сохраняет ответ в файл responses/original_*.json или responses/modified_*.json"""
+    try:
+        os.makedirs('responses', exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        kind = "modified" if modified else "original"
+        filename = f"responses/{kind}_{timestamp}.json"
+        
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(full_responce, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[-] Ошибка при сохранении ответа: {e}")
 
 
 if __name__ == "__main__":
