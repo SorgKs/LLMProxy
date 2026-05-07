@@ -423,7 +423,7 @@ async def proxy_chat_completions(request: Request):
         available_tools = [tool.get("function", {}).get("name", "") for tool in modified_body["tools"]]
     
     # 📤 Вывод информации о запросе (метаданные) + файл (полный контент)
-    print(f"{datetime.now().isoformat()} | request | model={model} | stream={is_stream} | tools={len(available_tools)}")
+    print(f"{datetime.now().isoformat()} | REQ | size={len(str(body))} | tools={len(available_tools)}")
     
     # Настройки self-correction
     max_corrections = 2
@@ -472,14 +472,13 @@ async def proxy_chat_completions(request: Request):
         
         # Логируем оригинальный ответ через log.py (файл) + консоль (метаданные)
         log_response(
-            model=answer.model,
             full_response=json.dumps(answer.full_response),
             duration=answer.duration,
-            response_type="ORIGINAL",
-            is_stream=answer.is_stream,
+            tools=available_tools,
             status_code=answer.status_code
         )
-        print(f"{datetime.now().isoformat()} | response | model={answer.model} | status={answer.status_code} | duration={answer.duration:.2f}s | stream={answer.is_stream}")
+        tools_list = ",".join([tc.get("function", {}).get("name", "") for tc in answer.tool_calls if "function" in tc])
+        print(f"{datetime.now().isoformat()} | ANS | size={len(str(answer.full_response))} | status={answer.status_code} | {tools_list} | duration={answer.duration:.2f}s")
         
         # Устанавливаем workspace_path если есть
         if hasattr(request_processor, 'workspace_path'):
@@ -602,14 +601,13 @@ async def proxy_chat_completions(request: Request):
     
     # Логируем финальный ответ (файл) + консоль (метаданные)
     log_response(
-        model=final_answer.model,
         full_response=json.dumps(final_answer.full_response),
         duration=final_answer.duration,
-        response_type="PROCESSED",
-        is_stream=is_stream,
+        tools=available_tools,
         status_code=final_answer.status_code
     )
-    print(f"{datetime.now().isoformat()} | response | model={final_answer.model} | status={final_answer.status_code} | duration={final_answer.duration:.2f}s | stream={is_stream} | type=PROCESSED")
+    tools_list = ",".join([tc.get("function", {}).get("name", "") for tc in final_answer.tool_calls if "function" in tc])
+    print(f"{datetime.now().isoformat()} | ANS | size={len(str(final_answer.full_response))} | status={final_answer.status_code} | {tools_list} | duration={final_answer.duration:.2f}s")
     
     return Response(
         content=json.dumps(final_answer.full_response),

@@ -4,6 +4,7 @@ import re
 import time
 import copy
 import os
+import yaml
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
 from log import log_response, log_tool_calls, log_validation_error, log_retry_attempt
@@ -274,7 +275,7 @@ class AnswerProcessor:
         }
     }
     
-    def __init__(self):
+    def __init__(self, config_path: str = "config/tools.yaml"):
         """Инициализация процессора"""
         self._was_changed = False
         self.changes_log = []
@@ -286,6 +287,9 @@ class AnswerProcessor:
         # Менеджер повторных попыток
         self.retry_manager = RetryManager(max_retries=2)
         self.conversation_id = None  # Будет установлен извне
+        
+        # Загружаем конфигурацию инструментов
+        self.tools_config = self._load_tools_config(config_path)
         
         # Сигнатуры для поиска маркеров
         self.source_signatures = [
@@ -312,6 +316,58 @@ class AnswerProcessor:
     def changed(self) -> bool:
         """Были ли изменения в последнем process()"""
         return self._was_changed
+    
+    def _load_tools_config(self, config_path: str) -> Dict[str, bool]:
+        """
+        Загружает конфигурацию инструментов из config/tools.yaml
+        
+        Args:
+            config_path: Путь к файлу конфигурации
+            
+        Returns:
+            Dict[str, bool]: Словарь {имя_инструмента: включен/выключен}
+        """
+        default_config = {
+            "apply_diff": True,
+            "read_file": True,
+            "ask_followup_question": True,
+            "attempt_completion": True,
+            "codebase_search": True,
+            "execute_command": True,
+            "function_replace": True,
+            "list_files": True,
+            "new_task": True,
+            "read_command_output": True,
+            "search_files": True,
+            "switch_mode": False,
+            "update_todo_list": True,
+            "write_to_file": True,
+            "mcp_context7_resolve_library_id": True,
+            "mcp_context7_query_docs": True,
+            "skill": False
+        }
+        
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                
+                tools_config = {}
+                tools = config.get("tools")
+                if tools and isinstance(tools, dict):
+                    for tool_name, tool_enabled in tools.items():
+                        tools_config[tool_name] = bool(tool_enabled)
+                
+                if tools_config:
+                    return tools_config
+                else:
+                    return default_config
+            else:
+                return default_config
+                
+        except Exception as e:
+            print(f"[-] Ошибка загрузки {config_path}: {str(e)}")
+            return default_config
     
     def _parse_arguments(self, args_str: str, tool_name: str = "unknown", tool_call_id: str = "unknown") -> Dict[str, Any]:
         """Парсит строку аргументов в dict. Выбрасывает ArgumentParseError при ошибке."""
@@ -1248,37 +1304,57 @@ class AnswerProcessor:
         
         return result
 
-    def _unwrap_double_encoding(self, args_str: str, max_depth: int = 5) -> str:
+    def _unwrap_double_encoding(self, args_str: str, max_depth: int = 10) -> str:
         """
-        Рекурсивно раскрывает двойное/множественное экранирование JSON.
-        Возвращает строку, которая гарантированно является валидным JSON.
+        Рекурсивно парсит JSON до тех пор, пока это возможно.
+        Возвращает строковое представление последнего успешно распарсенного объекта.
         """
+        if not isinstance(args_str, str):
+            # Если уже не строка - возвращаем как есть
+            return args_str if isinstance(args_str, str) else json.dumps(args_str)
+        
         current = args_str
-        changed = False
+        last_success = args_str
+        last_success_obj = None
         
         for depth in range(max_depth):
             try:
-                # Пробуем распарсить
+                # Парсим текущий уровень
                 parsed = json.loads(current)
                 
-                # Если получили строку — это признак двойного экранирования
+                # Запоминаем успешный результат
+                last_success = current
+                last_success_obj = parsed
+                
+                # Если распарсили в строку - пробуем парсить её как JSON
                 if isinstance(parsed, str):
-                    current = parsed
-                    changed = True
+                    current = parsed  # Продолжаем с этой строкой
                     continue
                 
-                # Если получили dict или list — выходим, дальше парсить не нужно
-                break
+                # Если распарсили в dict или list - это конечный объект
+                # Сериализуем обратно в строку (но уже без лишних кавычек)
+                if isinstance(parsed, (dict, list)):
+                    return json.dumps(parsed)
+                
+                # Другие типы (числа, булевы, null) - возвращаем как есть
+                return current
                 
             except json.JSONDecodeError:
-                # Невалидный JSON — выходим
+                # Невалидный JSON - выходим из цикла
                 break
         
-        # Если были изменения, возвращаем исправленную строку
-        if changed:
-            return current
+        # Возвращаем последний успешно распарсенный результат
+        if last_success_obj is not None:
+            if isinstance(last_success_obj, (dict, list)):
+                return json.dumps(last_success_obj)
+            elif isinstance(last_success_obj, str):
+                # Может быть, нужно ещё раскрыть unicode escape?
+                # Но в рамках этой логики - возвращаем как есть
+                return last_success_obj
+            else:
+                return json.dumps(last_success_obj)
         
-        # Иначе возвращаем оригинал
+        # Ни одного успешного парсинга - возвращаем оригинал
         return args_str
 
     def validate_tool_calls(self, answer) -> Tuple[bool, List[Dict]]:
@@ -1734,16 +1810,14 @@ class AnswerProcessor:
         
         # Логируем оригинал
         log_response(
-            model=answer.model,
             full_response=json.dumps(answer.full_response),
             duration=answer.duration,
-            response_type="ORIGINAL",
-            is_stream=answer.is_stream,
+            tools=list(self.tools_config.keys()),
             status_code=answer.status_code
         )
         
         # Сохраняем исходный ответ в responses/
-        self._save_original_response(answer)
+        self._save_original_response(answer, tools=list(self.tools_config.keys()))
         
         # 1. Извлекаем tool calls из текста
         if self._extract_and_add_tool_calls(answer):
@@ -1816,11 +1890,9 @@ class AnswerProcessor:
         
         # 6. Логируем результат
         log_response(
-            model=answer.model,
             full_response=json.dumps(answer.full_response, ensure_ascii=False, default=str),
             duration=answer.duration,
-            response_type="PROCESSED",
-            is_stream=answer.is_stream,
+            tools=list(self.tools_config.keys()),
             status_code=200
         )
         
@@ -1831,7 +1903,7 @@ class AnswerProcessor:
         
         # Сохраняем модифицированный ответ в responses/ (если были изменения)
         if self._was_changed:
-            self._save_modified_response(answer)
+            self._save_modified_response(answer, tools=list(self.tools_config.keys()))
         
         return None
 
@@ -2463,19 +2535,19 @@ class AnswerProcessor:
         
         return '\n'.join(result)
 
-    def _save_original_response(self, answer) -> None:
-        """Сохраняет исходный ответ в файл responses/original_<timestamp>_<model>.json"""
+    def _save_original_response(self, answer, tools: List[str] = None) -> None:
+        """Сохраняет исходный ответ в файл responses/original_<timestamp>.json"""
         try:
+            if tools is None:
+                tools = []
             os.makedirs('responses', exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_model = answer.model.replace('/', '_').replace(':', '_')
-            filename = f"responses/original_{timestamp}_{safe_model}.json"
+            filename = f"responses/original_{timestamp}.json"
             
             data = {
                 "timestamp": datetime.now().isoformat(),
-                "model": answer.model,
+                "tools": tools,
                 "duration": answer.duration,
-                "is_stream": answer.is_stream,
                 "status_code": answer.status_code,
                 "full_response": answer.full_response
             }
@@ -2485,19 +2557,19 @@ class AnswerProcessor:
         except Exception as e:
             print(f"[-] Ошибка при сохранении исходного ответа: {e}")
 
-    def _save_modified_response(self, answer) -> None:
-        """Сохраняет модифицированный ответ в файл responses/modified_<timestamp>_<model>.json"""
+    def _save_modified_response(self, answer, tools: List[str] = None) -> None:
+        """Сохраняет модифицированный ответ в файл responses/modified_<timestamp>.json"""
         try:
+            if tools is None:
+                tools = []
             os.makedirs('responses', exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            safe_model = answer.model.replace('/', '_').replace(':', '_')
-            filename = f"responses/modified_{timestamp}_{safe_model}.json"
+            filename = f"responses/modified_{timestamp}.json"
             
             data = {
                 "timestamp": datetime.now().isoformat(),
-                "model": answer.model,
+                "tools": tools,
                 "duration": answer.duration,
-                "is_stream": answer.is_stream,
                 "status_code": answer.status_code,
                 "full_response": answer.full_response,
                 "changes_log": self.changes_log

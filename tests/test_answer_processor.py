@@ -286,6 +286,72 @@ class TestRealLLMResponse(unittest.TestCase):
         
         print(f"✅ Распарсено: {parsed}")
 
+    def test_processor_search_files_double_encoding(self):
+        """Проверяет, что процессор исправляет двойное экранирование для search_files"""
+        
+        # Симулируем проблему двойного экранирования для search_files
+        tool_calls = [{
+            "type": "function",
+            "index": 0,
+            "id": "fc-test",
+            "function": {
+                "name": "search_files",
+                "arguments": "\"{\\\"path\\\": \\\".\\\", \\\"regex\\\": \\\\\\\"RequestProcessor\\\\\\\"}\""
+            }
+        }]
+        
+        answer = self.create_answer_from_real_response({"response": {"choices": [{"message": {"tool_calls": tool_calls}}]}})
+        
+        print(f"\n📥 До исправления: {answer.tool_calls[0]['function']['arguments']}")
+        
+        # Запускаем процессор
+        self.processor.process(answer)
+        
+        print(f"📤 После исправления: {answer.tool_calls[0]['function']['arguments']}")
+        
+        # Проверяем, что теперь это валидный JSON
+        args_str = answer.tool_calls[0]['function']['arguments']
+        parsed = json.loads(args_str)
+        
+        self.assertIsInstance(parsed, dict, "Должен парситься в dict")
+        self.assertEqual(parsed.get('path'), '.', "path должен быть '.'")
+        self.assertEqual(parsed.get('regex'), 'RequestProcessor', "regex должен быть сохранен")
+        
+        print(f"✅ Распарсено: {parsed}")
+
+    def test_processor_list_files_double_encoding(self):
+        """Проверяет, что процессор исправляет двойное экранирование для list_files"""
+        
+        # Симулируем проблему двойного экранирования для list_files
+        tool_calls = [{
+            "type": "function",
+            "index": 0,
+            "id": "fc-test",
+            "function": {
+                "name": "list_files",
+                "arguments": "\"{\\\"path\\\": \".\", \\\"recursive\\\": true}\""
+            }
+        }]
+        
+        answer = self.create_answer_from_real_response({"response": {"choices": [{"message": {"tool_calls": tool_calls}}]}})
+        
+        print(f"\n📥 До исправления: {answer.tool_calls[0]['function']['arguments']}")
+        
+        # Запускаем процессор
+        self.processor.process(answer)
+        
+        print(f"📤 После исправления: {answer.tool_calls[0]['function']['arguments']}")
+        
+        # Проверяем, что теперь это валидный JSON
+        args_str = answer.tool_calls[0]['function']['arguments']
+        parsed = json.loads(args_str)
+        
+        self.assertIsInstance(parsed, dict, "Должен парситься в dict")
+        self.assertEqual(parsed.get('path'), '.', "path должен быть '.'")
+        self.assertEqual(parsed.get('recursive'), True, "recursive должен быть True")
+        
+        print(f"✅ Распарсено: {parsed}")
+
 
 def run_tests():
     """Запускает все тесты с выводом результата"""

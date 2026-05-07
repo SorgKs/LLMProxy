@@ -93,28 +93,26 @@ def log_modified_request(method: str, url: str, headers: dict, body: Optional[di
     _write_log(MODIFIED_REQUEST_LOG, log_entry)
 
 
-def log_response(model: str, full_response: str, duration: float, 
-                 response_type: str = "ORIGINAL", is_stream: bool = False,
-                 status_code: int = 200):
+def log_response(full_response: str, duration: float,
+                 tools: List[str] = None, status_code: int = 200):
     """
     Логирует ответ от LLM.
     
     Args:
-        model: Название модели
         full_response: Полный ответ в виде JSON строки
         duration: Длительность запроса в секундах
-        response_type: Тип ответа (ORIGINAL/PROCESSED)
-        is_stream: Был ли запрос streaming
+        tools: Список доступных инструментов
         status_code: HTTP статус код
     """
     timestamp = datetime.now().isoformat()
     
+    if tools is None:
+        tools = []
+    
     log_entry = {
         "timestamp": timestamp,
         "type": "llm_response",
-        "model": model,
-        "response_type": response_type,
-        "is_stream": is_stream,
+        "tools": tools,
         "status_code": status_code,
         "duration": round(duration, 3),
         "response_preview": full_response
@@ -123,7 +121,7 @@ def log_response(model: str, full_response: str, duration: float,
     _write_log(RESPONSE_LOG, log_entry)
     
     # Также логируем статистику
-    log_stats(model, duration, status_code, response_type)
+    log_stats(None, duration, status_code, None)
 
 
 def log_tool_calls(tool_calls: List[Dict]):
