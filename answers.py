@@ -7,7 +7,7 @@ import os
 import yaml
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
-from log import log_response, log_tool_calls, log_validation_error, log_retry_attempt
+from log import log_response, log_retry_attempt
 
 
 class ArgumentParseError(Exception):
@@ -281,9 +281,7 @@ class AnswerProcessor:
         self.changes_log = []
         self._current_test_name = ""  # Для тестов
         self.workspace_path = None  # Будет установлен извне
-        self.errors_log_path = "errors.log"  # Путь для логирования ошибок форматирования
-        self.retry_failures_path = "retry_failures.log"  # Путь для логирования проваленных retry
-        
+        self.progress = {}
         # Менеджер повторных попыток
         self.retry_manager = RetryManager(max_retries=2)
         self.conversation_id = None  # Будет установлен извне
@@ -386,6 +384,9 @@ class AnswerProcessor:
                 tool_name=tool_name, tool_call_id=tool_call_id, original_args=args_str
             )
         
+        # 0. Раскрываем двойное экранирование
+        args_str = self._unwrap_double_encoding(args_str)
+
         # 1. Пробуем как JSON
         try:
             parsed = json.loads(args_str)
@@ -398,16 +399,11 @@ class AnswerProcessor:
         except json.JSONDecodeError:
             pass
         
-        # 2. Пробуем распарсить самостоятельно для apply_diff
-        if tool_name == "apply_diff":
-            path_match = re.search(r'"path"\s*:\s*"([^"]+)"', args_str)
-            diff_match = re.search(r'"diff"\s*:\s*"(.*?)(?:"\s*\})?$', args_str, re.DOTALL)
-            
-            if path_match and diff_match:
-                path = path_match.group(1)
-                diff = diff_match.group(1)
-                diff = diff.replace('\\n', '\n').replace('\\"', '"').replace('\\\\', '\\')
-                return {"path": path, "diff": diff}
+        # 2. Пробуем распарсить Python-подобный синтаксис
+        try:
+            return self._args_to_dict(args_str, tool_name, tool_call_id)
+        except ArgumentParseError:
+            pass
         
         raise ArgumentParseError(
             "Не удалось распарсить аргументы ни одним из способов",
@@ -426,210 +422,11 @@ class AnswerProcessor:
         
         return json.dumps(serializable, ensure_ascii=False)
     
-
-    def _extract_file_content_from_request(
-        self, request_body: dict, target_path: str
-    ) -> List[str]:
-        """
-        Собирает максимально полное представление о содержимом файла,
-        используя все read_file‑tool‑calls, которые уже присутствуют
-        в запросе/ответе от клиента.
-
-        Args:
-            request_body: Словарь HTTP‑запроса с полем messages[].
-            target_path: Путь к файлу, для которого собирается контент.
-
-        Returns:
-            Список строк файла, где индекс = номер строки ‑ 1.
-            Пустые строки означают, что соответствующая часть файла неизвестна.
-        """
-        file_lines: Dict[int, str] = {}
-
-        messages = request_body.get("messages", [])
-        # Обход от последнего сообщения к первому: новые куски переопределяют старые
-        for msg in reversed(messages):
-            tool_calls = msg.get("tool_calls") or []
-            for tc in tool_calls:
-                func = tc.get("function", {})
-                if func.get("name") != "read_file":
-                    continue
-                args = func.get("arguments")
-                if not isinstance(args, dict):
-                    continue
-                if args.get("path") != target_path:
-                    continue
-
-                # Разбор аргументов
-                offset = args.get("offset", 1)  # 1‑based
-                content = args.get("content", "")
-                if not isinstance(offset, int) or offset < 1:
-                    offset = 1
-
-                # Нормализация content в список строк
-                if isinstance(content, str):
-                    lines = content.split("\n")
-                elif isinstance(content, list):
-                    lines = [str(l) for l in content]
-                else:
-                    lines = []
-
-                # Убираем возможные пустые строки в конце
-                while lines and lines[-1] == "":
-                    lines.pop()
-
-                # Заполняем file_lines (не перезаписываем уже известные)
-                for idx_in_chunk, line_text in enumerate(lines):
-                    line_no = offset + idx_in_chunk
-                    if line_no not in file_lines:
-                        file_lines[line_no] = line_text
-
-        if not file_lines:
-            return []
-
-        max_line = max(file_lines.keys())
-        full_content = [""] * max_line
-        for line_no, text in file_lines.items():
-            full_content[line_no - 1] = text
-
-        return full_content
-
-    def _extract_content_from_data(self, path: str) -> List[str]:
-        """
-        Извлекает содержимое файла из data-параметра.
-
-        Args:
-            path: Путь к файлу, для которого нужен контент.
-
-        Returns:
-            Список строк файла, где индекс = номер строки ‑ 1.
-            Пустой список, если данных нет или не подходят.
-        """
-        if not hasattr(self, '_request_data') or not self._request_data:
-            return []
-        
-        data = self._request_data
-        if not isinstance(data, dict):
-            return []
-        
-        if data.get("type") != "file_content":
-            return []
-        
-        if data.get("path") != path:
-            return []
-        
-        content = data.get("content")
-        if content is None:
-            return []
-        
-        if isinstance(content, str):
-            lines = content.split("\n")
-            while lines and lines[-1] == "":
-                lines.pop()
-            return lines
-        elif isinstance(content, list):
-            return [str(l) for l in content]
-        
-        return []
-
-    def _detect_full_function_presence(
-        self,
-        file_lines: List[str],
-        function_name: str,
-        language: str = "python",
-    ) -> Tuple[bool, Optional[int], Optional[int], Optional[str]]:
-        """
-        Проверяет, присутствует ли в уже собранном (возможно частичном)
-        содержимом файла полный исходный код функции с заданным именем.
-
-        Args:
-            file_lines: Список строк файла, где индекс = номер строки ‑ 1.
-                        Пустые строки означают неизвестность.
-            function_name: Имя искомой функции.
-            language: Язык файла (по умолчанию python).
-
-        Returns:
-            Кортеж (has_full_code, start_line, end_line, leading_comment).
-            При has_full_code=False значения start_line/end_line могут быть None.
-        """
-        if language != "python":
-            # Для других языков пока не реализовано
-            return False, None, None, None
-
-        # 1. Поиск объявления функции
-        start_idx = -1
-        original_indent = None
-        for i, line in enumerate(file_lines):
-            if not line:  # неизвестная строка
-                continue
-            stripped = line.lstrip()
-            if stripped.startswith(f"def {function_name}(") and stripped.rstrip().endswith(":"):
-                start_idx = i
-                original_indent = len(line) - len(stripped)
-                break
-
-        if start_idx == -1:
-            return False, None, None, None
-
-        # 2. Сбор комментария ПЕРЕД функцией
-        leading_lines = []
-        j = start_idx - 1
-        while j >= 0:
-            if not file_lines[j]:  # неизвестная строка — стоп
-                break
-            stripped = file_lines[j].strip()
-            if stripped == "" or stripped.startswith("#"):
-                leading_lines.insert(0, file_lines[j])
-            else:
-                break
-            j -= 1
-        leading_comment = "\n".join(leading_lines) if leading_lines else None
-
-        # 3. Определение тела функции
-        body_start_idx = start_idx + 1
-        # Находим последнюю непустую строку среди известных, которая относится к телу
-        end_idx = None
-        for i in range(body_start_idx, len(file_lines)):
-            line = file_lines[i]
-            if not line:  # неизвестная строка — тело оборвано
-                return False, None, None, None
-            # Проверка отступа: если отступ <= отступу def и строка не пуста,
-            # значит тело закончилось (начался другой объект)
-            stripped = line.strip()
-            if stripped:
-                cur_indent = len(line) - len(stripped)
-                if cur_indent <= original_indent:
-                    end_idx = i
-                    break
-
-        if end_idx is None:
-            # Дошли до конца известных строк, тело не завершено явно
-            # Проверяем, есть ли вообще какие‑то строки тела
-            has_body = any(
-                file_lines[k] and file_lines[k].strip()
-                for k in range(body_start_idx, len(file_lines))
-            )
-            if not has_body:
-                return False, None, None, None
-            # Если все известные строки тела заполнены, считаем код полным
-            # (никаких пропусков внутри тела)
-            all_known = all(
-                file_lines[k] != ""
-                for k in range(body_start_idx, len(file_lines))
-            )
-            if all_known:
-                end_idx = len(file_lines)
-            else:
-                return False, None, None, None
-
-        # start_line и end_line в 1‑based нумерации
-        has_full_code = True
-        return has_full_code, start_idx + 1, end_idx, leading_comment
-
     def _convert_function_replace(
         self,
         path: str,
         function_name: str,
-        new_code: str,
+        full_code: str,
         file_lines: List[str],
     ) -> Optional[Dict[str, str]]:
         """
@@ -638,7 +435,7 @@ class AnswerProcessor:
         Args:
             path: Путь к файлу.
             function_name: Имя заменяемой функции.
-            new_code: Новый полный код функции (включая def ...).
+            full_code: Новый полный код функции (включая def ...).
             file_lines: Известные строки файла (из _extract_file_content_from_request).
 
         Returns:
@@ -663,7 +460,7 @@ class AnswerProcessor:
         # Убираем общий минимальный отступ у старого тела и нового кода
         old_body = "\n".join(old_body_lines)
         old_normalized = self._normalize_indent(old_body, remove_all=False)
-        new_normalized = self._normalize_indent(new_code, remove_all=False)
+        new_normalized = self._normalize_indent(full_code, remove_all=False)
 
         # Формируем diff
         diff_lines = []
@@ -746,55 +543,6 @@ class AnswerProcessor:
             return self._decode_unicode_escapes(obj)
         else:
             return obj
-    
-    def _log_formatting_bug(self, error: dict, tool_call: dict, answer) -> None:
-        """
-        Записывает в errors.log информацию о баге в алгоритме исправления форматирования.
-        
-        Args:
-            error: Детали ошибки форматирования
-            tool_call: Исходный tool call, который не удалось исправить
-            answer: Объект Answer с данными ответа
-        """
-        log_entry = {
-            "timestamp": datetime.now().isoformat(),
-            "error_type": error["type"],
-            "error_message": error["message"],
-            "category": "formatting_bug",
-            "tool_call": tool_call,
-            "model": answer.model,
-            "duration": answer.duration,
-            "is_stream": answer.is_stream,
-            "suggestion": "Алгоритм fix_apply_diff не обработал этот случай форматирования",
-            "raw_diff": error.get("raw_diff", "")
-        }
-        
-        try:
-            with open(self.errors_log_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-        except Exception as e:
-            print(f"[-] Ошибка при записи в errors.log: {e}")
-    
-    def _log_retry_failure(self, conversation_id: str, tool_call_id: str, 
-                          errors: List[Dict], tool_call: Dict) -> None:
-        """
-        Логирует фатальную ошибку retry (лимит исчерпан).
-        """
-        log_entry = {
-            "timestamp": datetime.now().isoformat(),
-            "conversation_id": conversation_id,
-            "tool_call_id": tool_call_id,
-            "error_type": "retry_limit_exceeded",
-            "max_retries": self.retry_manager.max_retries,
-            "errors": errors,
-            "tool_call": tool_call
-        }
-        
-        try:
-            with open(self.retry_failures_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-        except Exception as e:
-            print(f"[-] Ошибка при записи retry_failures.log: {e}")
     
     def _should_retry(self, validation_result: Dict) -> Tuple[bool, List[Dict], List[Dict]]:
         """
@@ -1611,7 +1359,7 @@ class AnswerProcessor:
                         "tool_name": tool_name,
                         "error": "missing_required_field",
                         "message": "Required field 'path' is missing",
-                        "required_fields": ["path", "function", "code"],
+                        "required_fields": ["path", "function", "full_code"],
                         "received_fields": list(parsed.keys())
                     })
                 elif not isinstance(parsed["path"], str):
@@ -1629,7 +1377,7 @@ class AnswerProcessor:
                         "tool_name": tool_name,
                         "error": "missing_required_field",
                         "message": "Required field 'function' is missing",
-                        "required_fields": ["path", "function", "code"],
+                        "required_fields": ["path", "function", "full_code"],
                         "received_fields": list(parsed.keys())
                     })
                 elif not isinstance(parsed["function"], str):
@@ -1641,22 +1389,22 @@ class AnswerProcessor:
                         "field": "function"
                     })
                 
-                if "code" not in parsed:
+                if "full_code" not in parsed:
                     errors.append({
                         "tool_call_id": tc.get('id', 'unknown'),
                         "tool_name": tool_name,
                         "error": "missing_required_field",
-                        "message": "Required field 'code' is missing",
-                        "required_fields": ["path", "function", "code"],
+                        "message": "Required field 'full_code' is missing",
+                        "required_fields": ["path", "function", "full_code"],
                         "received_fields": list(parsed.keys())
                     })
-                elif not isinstance(parsed["code"], str):
+                elif not isinstance(parsed["full_code"], str):
                     errors.append({
                         "tool_call_id": tc.get('id', 'unknown'),
                         "tool_name": tool_name,
                         "error": "invalid_field_type",
-                        "message": f"Field 'code' must be string, got {type(parsed['code']).__name__}",
-                        "field": "code"
+                        "message": f"Field 'full_code' must be string, got {type(parsed['full_code']).__name__}",
+                        "field": "full_code"
                     })
             
             elif tool_name == "ask_followup_question":
@@ -1690,7 +1438,7 @@ class AnswerProcessor:
         
         return len(errors) == 0, errors
 
-    def process_single_tool_call(self, tc: dict, index: int, request_body: dict = None) -> Tuple[bool, List[str]]:
+    def process_single_tool_call(self, tc: dict, index: int, data: dict = None) -> Tuple[bool, List[str]]:
         """Обрабатывает один tool call. Модифицирует tc напрямую если были изменения.
         
         Args:
@@ -1711,25 +1459,12 @@ class AnswerProcessor:
         
         tool_name = func['name']
         tool_call_id = tc['id']
-        original_args = func['arguments']
+        parsed_args = func['arguments']  # Уже распарсенный dict
         
         changes = []
-        
-        # 1. Раскрываем двойное экранирование
-        unwrapped_args = self._unwrap_double_encoding(original_args)
-        if unwrapped_args != original_args:
-            changes.append(f"{tool_name}: исправлено двойное экранирование")
-        
-        # 2. Парсим аргументы в отдельный dict
-        try:
-            parsed_args = self._parse_arguments(unwrapped_args, tool_name, tool_call_id)
-        except ArgumentParseError as e:
-            changes.append(f"❌ PARSE ERROR for {tool_name}: {e}")
-            return False, changes
-        
         changed = False
         
-        # 3. Исправляем parsed_args
+        # 2. Исправляем parsed_args
         try:
             if tool_name == "read_file":
                 if self._add_mode_slice_to_read_file(parsed_args):
@@ -1738,7 +1473,7 @@ class AnswerProcessor:
                 if self._fix_read_file_offset(parsed_args):
                     changed = True
                     changes.append("read_file: offset исправлен с 0 на 1")
-            
+        
             if tool_name == "apply_diff":
                 if self.fix_apply_diff(parsed_args):
                     changed = True
@@ -1753,71 +1488,91 @@ class AnswerProcessor:
                 changed = True
                 changes.append(f"{tool_name}: пустой path заменен на '.'")
             
-            # 3а. Конвертация function_replace → apply_diff при возможности
+            # 3а. Конвертация function_replace → apply_diff
             if tool_name == "function_replace":
                 path = parsed_args.get("path", "")
                 function_name = parsed_args.get("function", "")
-                new_code = parsed_args.get("code", "")
+                full_code = parsed_args.get("full_code", "")
                 
-                # Собираем file_lines из request_body если передан
+                print(f"[DEBUG process_single_tool_call] Processing function_replace:")
+                print(f"   - path: {path}")
+                print(f"   - function_name: {function_name}")
+                print(f"   - full_code length: {len(full_code)}")
+                print(f"   - data is None: {data is None}")
+                
+                if data:
+                    print(f"   - data type: {data.get('type')}")
+                    print(f"   - data content length: {len(data.get('content', ''))}")
+                    if not data.get('content'):
+                        print(f"   ⚠️ WARNING: data content is empty!")
+                else:
+                    print(f"   ⚠️ WARNING: data is None, cannot convert function_replace!")
+                
                 file_lines = []
-                if request_body is not None:
-                    file_lines = self._extract_file_content_from_request(request_body, path)
+                if data and data.get("type") == "function_content":
+                    content = data.get("content", "")
+                    if content:
+                        file_lines = content.split("\n")
+                        print(f"   - file_lines from data: {len(file_lines)} lines")
+                        # Показываем первые 3 строки для отладки
+                        for i, line in enumerate(file_lines[:3]):
+                            print(f"     line {i}: {line[:50]}...")
+                    else:
+                        print(f"   ⚠️ WARNING: data.content is empty string!")
                 
-                # Если нет в request_body, пробуем из внутреннего кэша
-                if not file_lines and hasattr(self, '_request_body') and self._request_body:
-                    file_lines = self._extract_file_content_from_request(
-                        self._request_body, path
-                    )
-                
-                # Если не удалось из кэша, пробуем прочитать файл напрямую
                 if not file_lines and path and self.workspace_path:
                     full_path = os.path.join(self.workspace_path, path)
+                    print(f"   - Trying to read file directly: {full_path}")
                     try:
                         with open(full_path, 'r', encoding='utf-8') as f:
-                            content = f.read()
-                        file_lines = content.split("\n")
-                    except (FileNotFoundError, OSError):
-                        pass
+                            file_lines = f.read().split("\n")
+                        print(f"   - file_lines from disk: {len(file_lines)} lines")
+                    except FileNotFoundError:
+                        print(f"   ❌ File not found: {full_path}")
+                    except OSError as e:
+                        print(f"   ❌ OS error: {e}")
                 
-                # Если файл есть, пробуем конвертировать
                 if file_lines:
+                    print(f"   - Calling _convert_function_replace...")
                     diff_result = self._convert_function_replace(
                         path=path,
                         function_name=function_name,
-                        new_code=new_code,
+                        full_code=full_code,
                         file_lines=file_lines
                     )
                     if diff_result is not None:
-                        # Успешная конвертация: заменяем function_replace на apply_diff
+                        print(f"   ✓ Conversion successful!")
                         tc['function']['name'] = 'apply_diff'
-                        parsed_args['diff'] = diff_result['diff']
+                        parsed_args = {
+                            'path': path,
+                            'diff': diff_result['diff']
+                        }
                         serialized_args = self._serialize_arguments(parsed_args)
                         tc['function']['arguments'] = serialized_args
                         changed = True
                         changes.append("function_replace: конвертирован в apply_diff")
+                    else:
+                        print(f"   ❌ _convert_function_replace returned None - function not found or incomplete")
+                        changes.append(f"function_replace: не удалось найти функцию {function_name} в файле {path}")
                 else:
-                    # Нет файла - нельзя конвертировать
-                    changes.append(f"function_replace: файл {path} недоступен, требуется read_file")
-        
+                    print(f"   ❌ No file_lines available, cannot convert function_replace")
+                    changes.append(f"function_replace: файл {path} недоступен или пуст")
+                    
         except Exception as e:
             changes.append(f"❌ FIX ERROR for {tool_name}: {e}")
             return False, changes
         
-        # 4. Если были изменения - сериализуем и вставляем в исходный tc
-        if changed or unwrapped_args != original_args:
-            serialized_args = self._serialize_arguments(parsed_args)
-            tc['function']['arguments'] = serialized_args
+        # 4. Если были изменения - просто возвращаем
+        if changed:
             return True, changes
         
         return False, changes
 
-    def process(self, answer, request_body: dict = None, data: dict = None) -> Optional[dict]:
+    def process(self, answer, data: str = None) -> Optional[dict]:
         """Обрабатывает ответ от LLM.
         
         Args:
             answer: Объект Answer с ответом от LLM
-            request_body: Тело исходного запроса (для извлечения file_lines)
             data: Дополнительные данные, переданные из proxy.py
                   Формат: {"type": "file_content", "path": "...", "content": "..."}
             
@@ -1828,11 +1583,8 @@ class AnswerProcessor:
         now = datetime.now().strftime("%H:%M:%S")
         self.reset()
         
-        # Сохраняем request_body и data для извлечения контента
-        if request_body is not None:
-            self._request_body = request_body
-        if data is not None:
-            self._request_data = data
+        if (data == None):
+            data = {"type":None, "path":None}
         
         # Проверяем обязательные поля в answer
         if not hasattr(answer, 'full_response'):
@@ -1852,9 +1604,7 @@ class AnswerProcessor:
         
         # Логируем оригинал
         log_response(
-            full_response=json.dumps(answer.full_response),
             duration=answer.duration,
-            tools=list(self.tools_config.keys()),
             status_code=answer.status_code
         )
         
@@ -1865,44 +1615,53 @@ class AnswerProcessor:
             self._was_changed = True
             self.changes_log.append("Извлечены tool calls из текста")
         
-        # 2. Проверяем есть ли function_replace без доступа к файлу
-        #    Если файла нет в request_body и нет прямого доступа - просим прочитать
-        if answer.tool_calls:
-            for i, tc in enumerate(answer.tool_calls):
-                func = tc.get('function', {})
-                if func.get('name') == 'function_replace':
-                    args = func.get('arguments', {})
-                    if isinstance(args, dict):
-                        path = args.get('path', '')
-                        function_name = args.get('function', '')
-                        new_code = args.get('code', '')
-                        
-                        # Пытаемся собрать file_lines
-                        file_lines = []
-                        if hasattr(self, '_request_body') and self._request_body:
-                            file_lines = self._extract_file_content_from_request(
-                                self._request_body, path
-                            )
-                        
-                        # Если нет file_lines, пробуем из data-параметра
-                        if not file_lines and hasattr(self, '_request_data') and self._request_data:
-                            file_lines = self._extract_content_from_data(path)
-                        
-                        if not file_lines:
-                            # Файл не доступен - возвращаем действие для proxy.py
-                            return {
-                                "action": "request_file",
-                                "path": path,
-                                "function_name": function_name,
-                                "new_code": new_code,
-                                "original_tc": tc
-                            }
-        
         # 3. Обрабатываем каждый tool call отдельно (модифицируем tc на месте)
         if answer.tool_calls:
+            print(f"[DEBUG process] Step 2: processing tool calls")
             for i, tc in enumerate(answer.tool_calls):
-                changed, changes = self.process_single_tool_call(tc, i)
+                if tc['id'] not in self.progress:
+                    self.progress[tc['id']] = "current"
                 
+                # Делаем глубокую копию tc
+                tc_copy = copy.deepcopy(tc)
+                tool_name = tc_copy['function']['name']
+
+                # Парсим аргументы
+                parsed_args = self._parse_arguments(
+                    tc_copy['function']['arguments'],
+                    tc_copy['function']['name'],
+                    tc_copy['id']
+                )
+                tc_copy['function']['arguments'] = parsed_args
+                
+                if self.progress[tc['id']] == "current":
+                    
+                    if (tool_name == "function_replace"):
+                        func_path = tc_copy['function']['arguments']['path']
+                        func_name = tc_copy['function']['arguments']['function']
+                        if data["path"] != func_path  or  data["type"] != "function_content":
+                            print(f"[DEBUG process] Step 3: Requesting function '{func_name}()' content from proxy.py")
+                            return {
+                                'action': 'request_function',
+                                'path': func_path,
+                                'function_name': func_name
+                            }
+                        if data["path"] == func_path  and  data["type"] == "function_content":
+                            print(f"[DEBUG process] Step 2: processing tool_call[{i}] = {func_name} with additional data")
+                            changed, changes = self.process_single_tool_call(tc_copy, i, data)
+                            print(f"   - tool name in tc_copy: {tc_copy['function']['name']}")
+                    else:
+                        print(f"[DEBUG process] Step 2: processing tool_call[{i}] = {tool_name}")
+                        changed, changes = self.process_single_tool_call(tc_copy, i)
+                        print(f"   - tool name in tc_copy: {tc_copy['function']['name']}")
+                        self.progress[tc['id']] = "completed"
+                
+                    # Сериализуем аргументы обратно в строку и обновляем tool_calls
+                    tc_copy['function']['arguments'] = self._serialize_arguments(tc_copy['function']['arguments'])
+                    answer.tool_calls[i] = copy.deepcopy(tc_copy)
+                    
+                    self.progress[tc['id']] = "completed"
+
                 if changed:
                     self._was_changed = True
                     self.changes_log.extend(changes)
@@ -1935,9 +1694,7 @@ class AnswerProcessor:
         
         # 6. Логируем результат
         log_response(
-            full_response=json.dumps(answer.full_response, ensure_ascii=False, default=str),
             duration=answer.duration,
-            tools=list(self.tools_config.keys()),
             status_code=200
         )
         
@@ -2360,21 +2117,14 @@ class AnswerProcessor:
         
         # Шаг 1: Ищем любые разделители, меняем на "======="
         separator_patterns = [
-            # Исходные паттерны (чистые разделители)
-            r'^={3,}$', r'^-{3,}$', r'^>{3,}$', r'^<{3,}$',
-            r'^[\[{]-{3,}[\]}]$', r'^[\[{]={3,}[\]}]$', r'^[\[{]>{3,}[\]}]$', r'^[\[{]<{3,}[\]}]$',
+            # SEARCH маркеры (любые обрамления)
+            r'^[<\[{]*\s*(?:SEARCH|SOURCE|SRC)\s*[>\]}]*$',
             
-            # SEARCH маркеры
-            r'^[\[\[{]+SEARCH[\]\]]+$', r'^[\[\[{]+SOURCE[\]\]]+$', r'^[\[\[{]+SRC[\]\]]+$',
-            r'^SEARCH$', r'^SOURCE$', r'^SRC$',
-            r'^<<<<<<< SEARCH$', r'^<<<<<<< SOURCE$', r'^<<<<<<< SRC$',
+            # REPLACE маркеры (любые обрамления)  
+            r'^[>\]}]*\s*REPLACE\s*[>\]}]*$',
             
-            # REPLACE маркеры
-            r'^[\[\[{]+REPLACE[\]\]]+$', r'^REPLACE$', r'^=======$', r'^[\[\[{]+=======[\]\}]+$',
-            
-            # END маркеры (разное количество >)
-            r'^>+ REPLACE$', r'^>+REPLACE$',
-            r'^>>>>>>> REPLACE$', r'^>>>>>> REPLACE$', r'^>>>>>>>>>>>> REPLACE$'
+            # Разделители (=== или ---)
+            r'^[=\-]{3,}$',
         ]
 
         

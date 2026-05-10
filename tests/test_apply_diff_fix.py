@@ -9,13 +9,6 @@ from unittest.mock import MagicMock
 # Добавляем родительскую директорию в путь для импорта
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Мокаем log.py ДО импорта answers.py
-sys.modules['log'] = MagicMock()
-import log
-log.log_response = MagicMock()
-log.log_tool_calls = MagicMock()
-log.log_validation_error = MagicMock()
-
 # Теперь импортируем AnswerProcessor
 from answers import AnswerProcessor
 

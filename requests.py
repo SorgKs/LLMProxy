@@ -702,11 +702,10 @@ class RequestProcessor:
         log_request(
             method=method,
             url=url,
-            headers=headers,
-            body=body
+            headers=headers
         )
         
-        # Сохраняем исходный запрос в responses/
+        # Сохраняем исходный запрос в requests/
         self._save_original_request(body, method, url, headers)
         
         # Делаем глубокую копию, чтобы не изменять оригинал
@@ -796,11 +795,10 @@ class RequestProcessor:
                 method=method,
                 url=url,
                 headers=headers,
-                body=modified_body,
                 modifications=modifications
             )
             
-            # Сохраняем модифицированный запрос в responses/
+            # Сохраняем модифицированный запрос в requests/
             self._save_modified_request(modified_body, modifications, method, url, headers)
             
             # Добавляем в общий лог изменений
