@@ -427,53 +427,42 @@ class AnswerProcessor:
         path: str,
         function_name: str,
         full_code: str,
-        file_lines: List[str],
+        file_lines: Dict[int, str],
     ) -> Optional[Dict[str, str]]:
-        """
-        Формирует apply_diff для замены тела функции.
-
-        Args:
-            path: Путь к файлу.
-            function_name: Имя заменяемой функции.
-            full_code: Новый полный код функции (включая def ...).
-            file_lines: Известные строки файла (из _extract_file_content_from_request).
-
-        Returns:
-            Словарь {"path": ..., "diff": ...} для apply_diff,
-            либо None, если сгенерировать diff невозможно.
-        """
-        result = self._detect_full_function_presence(file_lines, function_name)
-        has_full_code, start_line, end_line, leading_comment = result
-
-        if not has_full_code:
-            # Неполный код в файле — не можем сформировать точный diff
+        
+        if not file_lines:
+            print(f"❌ function_replace: словарь file_lines пуст")
             return None
-
-        # Извлекаем старый код
-        old_start_idx = start_line - 1
-        old_end_idx = end_line  # slice конец эксклюзивен, но у нас end_line — номер последней строки включительно?
-        # В _detect_full_function_presence end_idx — индекс строки, где тело заканчивается
-        # (либо len(file_lines)). Для среза file_lines[old_start_idx:old_end_idx]
-        # получим все строки старого тела.
-        old_body_lines = file_lines[old_start_idx:old_end_idx]
-
-        # Убираем общий минимальный отступ у старого тела и нового кода
-        old_body = "\n".join(old_body_lines)
-        old_normalized = self._normalize_indent(old_body, remove_all=False)
-        new_normalized = self._normalize_indent(full_code, remove_all=False)
-
+        
+        if not isinstance(file_lines, dict):
+            print(f"❌ function_replace: file_lines должен быть dict, получен {type(file_lines)}")
+            return None
+        
+        # Собираем старый код из словаря в правильном порядке
+        try:
+            sorted_keys = sorted(file_lines.keys())
+            old_code_lines = [file_lines[k] for k in sorted_keys]
+            old_code = '\n'.join(old_code_lines)
+        except Exception as e:
+            print(f"❌ function_replace: ошибка при сборке кода: {e}")
+            return None
+        
+        if not old_code.strip():
+            print(f"❌ function_replace: нет содержимого функции '{function_name}' в {path}")
+            return None
+        
         # Формируем diff
-        diff_lines = []
-        diff_lines.append("<<<<<<< SEARCH")
-        diff_lines.append(f":start_line:{start_line}")
-        diff_lines.append("-------")
-        diff_lines.extend(old_normalized.split("\n"))
-        diff_lines.append("=======")
-        diff_lines.extend(new_normalized.split("\n"))
-        diff_lines.append(">>>>>>> REPLACE")
-
-        diff_text = "\n".join(diff_lines)
-        return {"path": path, "diff": diff_text}
+        diff_lines = [
+            "<<<<<<< SEARCH",
+            ":start_line:1",
+            "-------",
+            old_code,
+            "=======",
+            full_code,
+            ">>>>>>> REPLACE"
+        ]
+        
+        return {"path": path, "diff": '\n'.join(diff_lines)}
 
     def validate_tool_calls_exist(
 
@@ -1494,70 +1483,38 @@ class AnswerProcessor:
                 function_name = parsed_args.get("function", "")
                 full_code = parsed_args.get("full_code", "")
                 
-                print(f"[DEBUG process_single_tool_call] Processing function_replace:")
+                print(f"[DEBUG function_replace] Начало обработки")
                 print(f"   - path: {path}")
                 print(f"   - function_name: {function_name}")
                 print(f"   - full_code length: {len(full_code)}")
                 print(f"   - data is None: {data is None}")
                 
-                if data:
-                    print(f"   - data type: {data.get('type')}")
-                    print(f"   - data content length: {len(data.get('content', ''))}")
-                    if not data.get('content'):
-                        print(f"   ⚠️ WARNING: data content is empty!")
-                else:
-                    print(f"   ⚠️ WARNING: data is None, cannot convert function_replace!")
-                
-                file_lines = []
                 if data and data.get("type") == "function_content":
-                    content = data.get("content", "")
-                    if content:
-                        file_lines = content.split("\n")
-                        print(f"   - file_lines from data: {len(file_lines)} lines")
-                        # Показываем первые 3 строки для отладки
-                        for i, line in enumerate(file_lines[:3]):
-                            print(f"     line {i}: {line[:50]}...")
-                    else:
-                        print(f"   ⚠️ WARNING: data.content is empty string!")
-                
-                if not file_lines and path and self.workspace_path:
-                    full_path = os.path.join(self.workspace_path, path)
-                    print(f"   - Trying to read file directly: {full_path}")
-                    try:
-                        with open(full_path, 'r', encoding='utf-8') as f:
-                            file_lines = f.read().split("\n")
-                        print(f"   - file_lines from disk: {len(file_lines)} lines")
-                    except FileNotFoundError:
-                        print(f"   ❌ File not found: {full_path}")
-                    except OSError as e:
-                        print(f"   ❌ OS error: {e}")
-                
-                if file_lines:
-                    print(f"   - Calling _convert_function_replace...")
-                    diff_result = self._convert_function_replace(
-                        path=path,
-                        function_name=function_name,
-                        full_code=full_code,
-                        file_lines=file_lines
-                    )
-                    if diff_result is not None:
-                        print(f"   ✓ Conversion successful!")
-                        tc['function']['name'] = 'apply_diff'
-                        parsed_args = {
-                            'path': path,
-                            'diff': diff_result['diff']
-                        }
-                        serialized_args = self._serialize_arguments(parsed_args)
-                        tc['function']['arguments'] = serialized_args
-                        changed = True
-                        changes.append("function_replace: конвертирован в apply_diff")
-                    else:
-                        print(f"   ❌ _convert_function_replace returned None - function not found or incomplete")
-                        changes.append(f"function_replace: не удалось найти функцию {function_name} в файле {path}")
-                else:
-                    print(f"   ❌ No file_lines available, cannot convert function_replace")
-                    changes.append(f"function_replace: файл {path} недоступен или пуст")
+                    content_dict = data.get("content", {})
+                    print(f"   - content_dict type: {type(content_dict)}")
+                    print(f"   - content_dict keys count: {len(content_dict.keys()) if content_dict else 0}")
                     
+                    if content_dict:
+                        print(f"   ✓ Вызов _convert_function_replace...")
+                        # ПЕРЕДАЕМ СЛОВАРЬ НАПРЯМУЮ
+                        diff_result = self._convert_function_replace(path, function_name, full_code, content_dict)
+                        
+                        if diff_result:
+                            print(f"   ✓ Конвертация успешна!")
+                            tc['function']['name'] = 'apply_diff'
+                            # Оставляем как dict, не сериализуем
+                            tc['function']['arguments'] = {'path': path, 'diff': diff_result['diff']}
+                            return True, [f"function_replace: конвертирован в apply_diff"]
+                        else:
+                            print(f"   ❌ _convert_function_replace вернул None")
+                            return False, [f"function_replace: не удалось заменить '{function_name}'"]
+                    else:
+                        print(f"   ❌ content_dict пуст")
+                        return False, [f"function_replace: нет данных функции '{function_name}' в {path}"]
+                else:
+                    print(f"   ❌ Нет данных function_content")
+                    return False, [f"function_replace: нет данных функции"]
+                                
         except Exception as e:
             changes.append(f"❌ FIX ERROR for {tool_name}: {e}")
             return False, changes
@@ -1639,17 +1596,17 @@ class AnswerProcessor:
                     if (tool_name == "function_replace"):
                         func_path = tc_copy['function']['arguments']['path']
                         func_name = tc_copy['function']['arguments']['function']
-                        if data["path"] != func_path  or  data["type"] != "function_content":
+                        if data and data.get("type") == "function_content" and data.get("path") == func_path:
+                            print(f"[DEBUG process] Step 3: Use function '{func_name}()' content")
+                            changed, changes = self.process_single_tool_call(tc_copy, i, data)
+                            self.progress[tc['id']] = "completed"
+                        else:
                             print(f"[DEBUG process] Step 3: Requesting function '{func_name}()' content from proxy.py")
                             return {
                                 'action': 'request_function',
                                 'path': func_path,
                                 'function_name': func_name
                             }
-                        if data["path"] == func_path  and  data["type"] == "function_content":
-                            print(f"[DEBUG process] Step 2: processing tool_call[{i}] = {func_name} with additional data")
-                            changed, changes = self.process_single_tool_call(tc_copy, i, data)
-                            print(f"   - tool name in tc_copy: {tc_copy['function']['name']}")
                     else:
                         print(f"[DEBUG process] Step 2: processing tool_call[{i}] = {tool_name}")
                         changed, changes = self.process_single_tool_call(tc_copy, i)

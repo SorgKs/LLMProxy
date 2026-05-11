@@ -137,9 +137,6 @@ def _extract_file_content_from_request(
     """
     Извлекает содержимое файла из read_file tool calls в ЗАПРОСЕ (body).
     """
-
-    last_line_num = 0
-
     if not isinstance(body, dict):
         return None
     
@@ -272,15 +269,29 @@ def _extract_file_content_from_request(
             if not line.strip():
                 continue
             
-            match = re.match(r'^\s*(\d+)\s*\|\s*(.*)$', line)
-            if match:
-                line_num = int(match.group(1))
-                line_content = match.group(2)
-        
-                if line_num not in content_dict:
-                    content_dict[line_num] = line_content
-                    if line_num > last_line_num:
-                        last_line_num = line_num
+            # Разбиваем строку по первому символу |
+            #print(f"'{line}'")
+            parts = line.split('| ', 1)
+            #print(parts)
+            if len(parts) != 2:
+                print(f"[DEBUG _extract_file_content_from_request] Разбиение по | не сработало")
+            
+            # Левая часть - номер строки
+            try:
+                line_num = int(parts[0].strip())
+            except ValueError:
+                continue
+            
+            # Правая часть - содержимое строки (сохраняем как есть)
+            line_content = parts[1]
+            # Если строка состоит только из пробелов, заменяем на пустую строку
+            if line_content and not line_content.strip():
+                line_content = ''
+            
+            if line_num not in content_dict:
+                content_dict[line_num] = line_content
+                if line_num > last_line_num:
+                    last_line_num = line_num
         
         if not EOF:
             limit = request_info["limit"]
@@ -369,7 +380,7 @@ def check_file_sufficiency(data: dict, pending_info: dict) -> Optional[dict]:
     return {
         "type": "file_content",
         "path": data_path,
-        "content": data,
+        "content": content,
         "line_count": len(line_numbers)
     }
 
@@ -379,9 +390,9 @@ def check_function_sufficiency(data: dict, function_name: str) -> Optional[str]:
     Проверяет, содержит ли data полное определение требуемой функции.
     Возвращает тело функции (включая def) если функция найдена и полная.
     """
-    print(f"[DEBUG check_function_sufficiency] data keys: {data.keys() if data else None}")
-    print(f"[DEBUG check_function_sufficiency] function_name: {function_name}")
-    print(f"[DEBUG check_function_sufficiency] line_count: {data.get('line_count')}")
+    #print(f"[DEBUG check_function_sufficiency] data keys: {data.keys() if data else None}")
+    #print(f"[DEBUG check_function_sufficiency] function_name: {function_name}")
+    #print(f"[DEBUG check_function_sufficiency] line_count: {data.get('line_count')}")
 
     if not data or not isinstance(data, dict):
         print(f"[DEBUG check_function_sufficiency] data is None or not dict")
@@ -410,18 +421,18 @@ def check_function_sufficiency(data: dict, function_name: str) -> Optional[str]:
         if line_content is None:
             continue
         
-        print(f"[DEBUG check_function_sufficiency] Line {i}: '{line_content[:50]}'")
+        #print(f"[DEBUG check_function_sufficiency] Line {i}: '{line_content[:50]}'")
         
         if def_pattern.search(line_content):
             start_line = i
-            print(f"[DEBUG proxy] Заголовок функции найден на строке {i}")
+            #print(f"[DEBUG proxy] Заголовок функции найден на строке {i}")
             break
     
     if start_line is None:
-        print(f"[DEBUG proxy] Заголовок функции '{function_name}' не найден")
+        #print(f"[DEBUG proxy] Заголовок функции '{function_name}' не найден")
         return None
-    else:
-        print(f"[DEBUG proxy] Заголовок функции '{function_name}' найден")
+    #else:
+        #print(f"[DEBUG proxy] Заголовок функции '{function_name}' найден")
     
     # Определяем базовый отступ
     key = start_line if use_int_keys else str(start_line)
@@ -429,7 +440,8 @@ def check_function_sufficiency(data: dict, function_name: str) -> Optional[str]:
     base_indent = len(def_line) - len(def_line.lstrip())
     
     # Собираем тело функции
-    function_body = [def_line]
+    function_body = {}
+    function_body[start_line] = def_line
     
     i = start_line + 1
     while i <= line_count:
@@ -442,23 +454,24 @@ def check_function_sufficiency(data: dict, function_name: str) -> Optional[str]:
         
         # Пустые строки и комментарии - часть тела
         if not line_content.strip() or line_content.strip().startswith('#'):
-            function_body.append(line_content)
+            function_body[i] = line_content
             i += 1
             continue
         
         # Если встретили строку с отступом <= базового и не декоратор - конец функции
-        print(line_content)
-        print(line_indent)
+        #print(line_content)
+        #print(line_indent)
         if line_indent <= base_indent:
             print(f"[DEBUG proxy] Функция полная (конец на строке {i})")
-            print(function_body)
+            #print(function_body)
             return {
                 "type": "function_content",
                 "path": data["path"],
+                "function": function_name,
                 "content": function_body
             }
         
-        function_body.append(line_content)
+        function_body[i] = line_content
         i += 1
     
     print(f"[DEBUG proxy] Функция обрезана (достигнут конец файла)")

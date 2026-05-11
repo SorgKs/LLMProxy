@@ -584,20 +584,20 @@ class RequestProcessor:
             self.changes_log.append("🔧 read_file: параметр mode удален")
         
         # 2.3. Удаляем параметр offset (он тоже связан со slice)
-        if "offset" in properties:
-            del properties["offset"]
-            if "required" in parameters and "offset" in parameters["required"]:
-                parameters["required"].remove("offset")
-            changed = True
-            self.changes_log.append("🔧 read_file: параметр offset удален")
+        #if "offset" in properties:
+        #    del properties["offset"]
+        #    if "required" in parameters and "offset" in parameters["required"]:
+        #        parameters["required"].remove("offset")
+        #    changed = True
+        #    self.changes_log.append("🔧 read_file: параметр offset удален")
         
         # 2.4. Удаляем параметр limit (он тоже связан со slice)
-        if "limit" in properties:
-            del properties["limit"]
-            if "required" in parameters and "limit" in parameters["required"]:
-                parameters["required"].remove("limit")
-            changed = True
-            self.changes_log.append("🔧 read_file: параметр limit удален")
+        #if "limit" in properties:
+        #    del properties["limit"]
+        #    if "required" in parameters and "limit" in parameters["required"]:
+        #        parameters["required"].remove("limit")
+        #    changed = True
+        #    self.changes_log.append("🔧 read_file: параметр limit удален")
         
         # 2.5. Удаляем все упоминания slice/indentation из описаний
         slice_terms = ['slice', 'indent', 'indentation', 'slicing', 'line range', 'partial read']
