@@ -1,0 +1,124 @@
+# config/tools_format.yaml
+# Форматы инструментов для валидации
+
+tools:
+  apply_diff:
+    fields:
+      - name: filePath
+        type: string
+        required: true
+      - name: search
+        type: string
+        required: true
+      - name: replace
+        type: string
+        required: true
+      - name: offset
+        type: number
+        required: false
+        default: 0
+    description: "Применяет изменения к файлу"
+
+  read_file:
+    fields:
+      - name: path
+        type: string
+        required: true
+      - name: offset
+        type: number
+        required: false
+        default: 1
+      - name: limit
+        type: number
+        required: false
+        default: 2000
+
+  list_files:
+    fields:
+      - name: path
+        type: string
+        required: true
+      - name: recursive
+        type: boolean
+        required: true
+
+  execute_command:
+    fields:
+      - name: command
+        type: string
+        required: true
+
+  write_to_file:
+    fields:
+      - name: path
+        type: string
+        required: true
+      - name: content
+        type: string
+        required: true
+
+  function_replace:
+    fields:
+      - name: path
+        type: string
+        required: true
+      - name: function
+        type: string
+        required: true
+      - name: full_code
+        type: string
+        required: true
+
+  ask_followup_question:
+    fields:
+      - name: question
+        type: string
+        required: true
+      - name: follow_up
+        type: string
+        required: true
+
+  attempt_completion:
+    fields:
+      - name: result
+        type: string
+        required: true
+
+  codebase_search:
+    fields:
+      - name: query
+        type: string
+        required: true
+      - name: path
+        type: string
+        required: false
+
+  search_files:
+    fields:
+      - name: path
+        type: string
+        required: true
+      - name: regex
+        type: string
+        required: true
+      - name: file_pattern
+        type: string
+        required: false
+
+  update_todo_list:
+    fields:
+      - name: todos
+        type: string
+        required: true
+
+  new_task:
+    fields:
+      - name: mode
+        type: string
+        required: true
+      - name: message
+        type: string
+        required: true
+      - name: todos
+        type: string
+        required: false
