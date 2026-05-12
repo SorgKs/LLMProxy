@@ -3,6 +3,7 @@ import time
 import json
 import uuid
 import re
+import copy
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
@@ -13,7 +14,7 @@ import os
 import atexit
 import traceback
 from answers import AnswerProcessor, ArgumentParseError
-from log import log_request, log_modified_request, log_response, log_retry_attempt, log_info, log_debug
+from log import log_response, log_retry_attempt, log_info, log_debug
 
 # Load environment variables
 try:
@@ -129,6 +130,73 @@ def _log_fatal_error(error: Exception, answer, context: str) -> None:
     traceback.print_exc()
     print(f"{'='*60}\n")
 
+def _extract_data_from_request(
+    pending_info: Dict[str, Any],
+    request_body: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """
+    Извлекает запрошенные данные (файл или функцию) из тела запроса клиента.
+    
+    Args:
+        pending_info: Информация о том, что ожидается (action, path, function_name)
+        request_body: Тело запроса от клиента
+        
+    Returns:
+        Извлеченные данные (file_content или function_content), если найдены и полные.
+        None, если данных нет или они неполные.
+    """
+    if not pending_info:
+        return None
+    
+    path = pending_info.get("path")
+    if not path:
+        print(f"[DEBUG _extract_data_from_request] Нет path в pending_info")
+        return None
+    
+    action = pending_info.get("action")
+    if not action:
+        print(f"[DEBUG _extract_data_from_request] Нет action в pending_info")
+        return None
+    
+    print(f"[DEBUG _extract_data_from_request] Извлекаем данные для {action}: path={path}")
+    
+    # Извлекаем сырой контент файла из запроса
+    extracted = _extract_file_content_from_request(request_body, path)
+    if extracted is None:
+        print(f"[DEBUG _extract_data_from_request] Не удалось извлечь содержимое файла '{path}'")
+        return None
+    
+    print(f"[DEBUG _extract_data_from_request] Получены сырые данные для файла '{path}'")
+    
+    # В зависимости от действия проверяем полноту данных
+    if action == "request_file":
+        # Для файла: проверяем целостность (непрерывность от 1 до N, EOF)
+        ready_data = check_file_sufficiency(extracted, pending_info)
+        if ready_data:
+            print(f"✓ Файл '{path}' найден и полный")
+            return ready_data
+        else:
+            print(f"⚠️ Файл '{path}' неполный или отсутствует в запросе")
+            return None
+    
+    elif action == "request_function":
+        # Для функции: проверяем наличие полного определения
+        function_name = pending_info.get("function_name")
+        if not function_name:
+            print(f"[DEBUG _extract_data_from_request] Нет function_name в pending_info")
+            return None
+        
+        ready_data = check_function_sufficiency(extracted, function_name)
+        if ready_data:
+            print(f"✓ Функция '{function_name}()' в '{path}' найдена и полная")
+            return ready_data
+        else:
+            print(f"⚠️ Функция '{function_name}()' в '{path}' неполная или отсутствует")
+            return None
+    
+    else:
+        print(f"[DEBUG _extract_data_from_request] Неизвестное действие: {action}")
+        return None
 
 def _extract_file_content_from_request(
     body: dict,
@@ -199,8 +267,8 @@ def _extract_file_content_from_request(
     # Шаг 2: Собираем ответы в обратном порядке
     content_dict = {}
     last_line_num = 0
+    total_lines = None
     EOF = False
-    line_count = None
     
     for msg in reversed(messages):
         if not isinstance(msg, dict):
@@ -233,15 +301,7 @@ def _extract_file_content_from_request(
                         continue
                     
                     if args.get('path') == target_path:
-                        if content_dict:
-                            return {
-                                'type': 'file_content',
-                                'path': target_path,
-                                'content': content_dict,
-                                'EOF': False,
-                                'line_count': None
-                            }
-                        return None
+                        break
         
         if msg.get("role") != "tool":
             continue
@@ -262,8 +322,40 @@ def _extract_file_content_from_request(
         # Парсим строки
         lines = content.split('\n')
         
-        if lines and lines[0].strip().startswith("File:"):
-            lines = lines[1:]
+        # Первая строка - мета-информация
+        meta_line = lines[0] if lines else ""
+        
+        start_shown = None
+        end_shown = None
+        
+        # line_count будет вычисляться в конце на основе всех собранных данных
+        
+        # Извлекаем показываемый диапазон
+        range_match = re.search(r'Showing lines (\d+)-(\d+)', meta_line, re.IGNORECASE)
+        if range_match:
+            start_shown = int(range_match.group(1))
+            end_shown = int(range_match.group(2))
+            current_offset = start_shown
+            current_limit = end_shown - start_shown + 1
+        
+        # Определяем EOF:
+        # 1. Если есть явный маркер "truncated" - точно не EOF
+        # 2. Если end_shown == total_lines - достигнут конец файла
+        # 3. Если запрошенный limit > полученных строк - значит файл кончился
+        
+        if "File content truncated" not in meta_line:
+            EOF = True
+        
+        # Удаляем мета-строки
+        lines = lines[1:]  # убираем "File: ..."
+        if lines and lines[0].strip().startswith("Status:"):
+            lines = lines[1:]  # убираем "Status: ..."
+        if lines and lines[0].strip().startswith("IMPORTANT:"):
+            lines = lines[1:]  # убираем "IMPORTANT: ..."
+            
+        # Убираем пустые строки в начале
+        while lines and not lines[0].strip():
+            lines = lines[0:]
         
         for line in lines:
             if not line.strip():
@@ -292,24 +384,22 @@ def _extract_file_content_from_request(
                 content_dict[line_num] = line_content
                 if line_num > last_line_num:
                     last_line_num = line_num
-        
-        if not EOF:
-            limit = request_info["limit"]
-            if last_line_num-request_info["offset"] < limit:
-                EOF = True
-                line_count = last_line_num
     
     if content_dict:
+        # Вычисляем line_count на основе собранных данных
+        line_count = max(int(k) for k in content_dict.keys()) if content_dict else 0
+        
+        # Сортируем ключи для обеспечения последовательного порядка
+        sorted_content = {k: content_dict[k] for k in sorted(content_dict.keys())}
         return {
             'type': 'file_content',
             'path': target_path,
-            'content': content_dict,
+            'content': sorted_content,
             'EOF': EOF,
             'line_count': line_count
         }
     
     return None
-
 
 def check_file_sufficiency(data: dict, pending_info: dict) -> Optional[dict]:
     """
@@ -367,15 +457,7 @@ def check_file_sufficiency(data: dict, pending_info: dict) -> Optional[dict]:
     for i in range(1, len(line_numbers)):
         if line_numbers[i] != line_numbers[i-1] + 1:
             return None
-    
-    # Дополнительная проверка line_count если указан
-    line_count = data.get('line_count')
-    if line_count is not None:
-        if len(line_numbers) != line_count:
-            return None
-        if line_numbers[-1] != line_count:
-            return None
-    
+
     # Данные достаточны - возвращаем готовый файл
     return {
         "type": "file_content",
@@ -383,7 +465,6 @@ def check_file_sufficiency(data: dict, pending_info: dict) -> Optional[dict]:
         "content": content,
         "line_count": len(line_numbers)
     }
-
 
 def check_function_sufficiency(data: dict, function_name: str) -> Optional[str]:
     """
@@ -475,7 +556,12 @@ def check_function_sufficiency(data: dict, function_name: str) -> Optional[str]:
         i += 1
     
     print(f"[DEBUG proxy] Функция обрезана (достигнут конец файла)")
-    return None
+    return {
+        "type": "function_content",
+        "path": data["path"],
+        "function": function_name,
+        "content": function_body
+    }
 
 
 # Инициализируем процессоры
@@ -489,7 +575,6 @@ _process_request_pending: Dict[str, Any] = {}
 class Answer:
     """Объект ответа от LLM"""
     full_response: Dict[str, Any]
-    is_stream: bool
     status_code: int
     duration: float
     workspace_path: Optional[str] = None
@@ -523,16 +608,41 @@ class Answer:
     def model(self) -> str:
         return self.full_response.get("model", "unknown")
 
+def _get_llm_headers(api_key: str) -> Dict[str, str]:
+    """
+    Формирует заголовки для запроса к LLM.
+    
+    Args:
+        api_key: API ключ для авторизации
+        
+    Returns:
+        Словарь с заголовками
+    """
+    return {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+        "HTTP-Referer": "http://localhost:8000",
+        "X-Title": "RooCode Proxy"
+    }
 
 async def send_to_llm_with_retry(
     request_body: dict, 
-    headers: dict, 
+    api_key: str,
     max_retries: int = 2
 ) -> Dict:
     """
     Отправляет ОДИН И ТОТ ЖЕ запрос с повторами при сбоях.
+    
+    Args:
+        request_body: Тело запроса
+        api_key: API ключ для авторизации
+        max_retries: Максимальное количество попыток
+        
+    Returns:
+        Словарь с ответом или ошибкой
     """
     last_error = None
+    headers = _get_llm_headers(api_key)
     
     for attempt in range(max_retries + 1):
         try:
@@ -680,40 +790,10 @@ async def proxy_chat_completions(request: Request):
         body = await request.json()
     except json.JSONDecodeError:
         raise HTTPException(400, "Invalid JSON")
-
-    # Подготовка заголовков
-    headers = {
-        "Content-Type": "application/json",
-    }
-    
-    # Используем OpenRouter API ключ
-    if not OPENROUTER_API_KEY:
-        print(f"⚠️ ERROR: OPENROUTER_API_KEY not set!")
-        return Response(
-            content=json.dumps({"error": "API key not configured"}),
-            status_code=500,
-            media_type="application/json"
-        )
-    
-    headers["Authorization"] = f"Bearer {OPENROUTER_API_KEY}"
-    headers["HTTP-Referer"] = "http://localhost:8000"
-    headers["X-Title"] = "RooCode Proxy"
-    
-    model = body.get("model", "unknown")
-    is_stream = body.get("stream", False)
     
     # ✅ ПРОЦЕССИРОВАНИЕ ИЗМЕНЕНИЙ ЗАПРОСА (уже логирует внутри)
-    modified_body = request_processor.process(
-        body=body.copy(),
-        method=request.method,
-        url=str(request.url),
-        headers=headers
-    )
-    
-    # Устанавливаем workspace_path для answer_processor
-    if hasattr(request_processor, 'workspace_path'):
-        answer_processor.workspace_path = request_processor.workspace_path
-    
+    modified_body = request_processor.process(body=body.copy())
+
     # Получаем список доступных инструментов
     available_tools = []
     if "tools" in modified_body:
@@ -727,53 +807,61 @@ async def proxy_chat_completions(request: Request):
     current_body = modified_body
     final_answer = None
     correction_attempt = 0
-    
-    # Проверяем, есть ли ожидающий запрос (request_file или request_function)
-    # Если есть, пытаемся получить данные из текущего запроса клиента
-    if _process_request_pending:
-        print(f"[DEBUG proxy] Обрабатываем отложенный запрос данных")
-        path = _process_request_pending.get("path")
-        action = _process_request_pending.get("action")
-        if path:
-            print(f"[DEBUG proxy] Собираем сырые данные")
-            extracted = _extract_file_content_from_request(body, path)
-            if extracted is not None:
-                print(f"[DEBUG proxy] Получены сырые данные")
-                if action == "request_file":
-                    print(f"[DEBUG proxy] Ищем запрошенный файл")
-                    ready_data = check_file_sufficiency(extracted, _process_request_pending)
-                    if ready_data:
-                        _process_request_pending["data"] = ready_data
-                        print(f"✓ Файл '{path}' найден")
-                    else:
-                        print(f"✓ Файл '{path}' не найден")
-                elif action == "request_function":
-                    print(f"[DEBUG proxy] Ищем запрошенную функцию")
-                    ready_data = check_function_sufficiency(extracted, _process_request_pending["function_name"])
-                    if ready_data:
-                        _process_request_pending["data"] = ready_data
-                        print(f"✓ Функция '{_process_request_pending["function_name"]}()' в '{path}' найдена")
-                    else:
-                        print(f"✓ Функция '{_process_request_pending["function_name"]}()' в '{path}' не найдена")
-            else:
-                print(f"[DEBUG proxy] Не получены сырые данные")
-        else:
-            print(f"[DEBUG proxy] Нет path в _process_request_pending")
-            print(_process_request_pending)
-    else:
-        print(f"[DEBUG proxy] Нет ожидающего запроса, идем дальше")
-    
+
     # Цикл self-correction (отправка НОВЫХ запросов при невалидных tool calls)
     while correction_attempt <= max_corrections:
-        # Проверяем, есть ли уже данные для process в _process_request_pending
-        pending_data = _process_request_pending.get("data") if _process_request_pending else None
-        
-        if pending_data is None:
-            # Отправка ТЕКУЩЕГО запроса с retry (повторы при сбоях)
+        pending_data = None
+        print(f"[DEBUG proxy] _process_request_pending = {_process_request_pending}")
+        if _process_request_pending:
+            pending_data = _extract_data_from_request(_process_request_pending,current_body)
+            if pending_data is None:
+                read_file_response = {
+                            "id": f"chatcmpl-{uuid.uuid4().hex}",
+                            "object": "chat.completion",
+                            "created": int(time.time()),
+                            "model": _process_request_pending["original_response"].model,
+                            "choices": [{
+                                "index": 0,
+                                "message": {
+                                    "role": "assistant",
+                                    "content": None,  # Нет текстового контента
+                                    "tool_calls": [{
+                                        "id": f"call_{uuid.uuid4().hex[:24]}",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "read_file",
+                                            "arguments": json.dumps({
+                                                "path": _process_request_pending.get("path"),
+                                                "offset": 1,
+                                                "limit": 2000
+                                            })
+                                        }
+                                    }]
+                                },
+                                "finish_reason": "tool_calls"
+                            }],
+                            "usage":  {
+                                "prompt_tokens": 0,
+                                "completion_tokens": 0,
+                                "total_tokens": 0
+                            }
+                        }
+                        
+                # Создаем новый Answer объект для read_file
+                answer = Answer(
+                    full_response=read_file_response,
+                    status_code=200,
+                    duration=0
+                )
+                break
+            else:
+                answer = copy.deepcopy(_process_request_pending["original_response"])
+        else:
+            # Отправка ТЕКУЩЕГО запроса с retry
             try:
                 collected_data = await send_to_llm_with_retry(
                     current_body,
-                    headers,
+                    OPENROUTER_API_KEY,
                     max_retries=2
                 )
             except MaxRetriesExceededError as e:
@@ -785,7 +873,7 @@ async def proxy_chat_completions(request: Request):
                     media_type="application/json"
                 )
             
-            # Обработка ошибок от LLM (не сетевых, а API ошибок)
+            # Обработка ошибок от LLM
             if collected_data.get("is_error"):
                 status_code = collected_data.get('status_code')
                 error_detail = collected_data.get('full_response', {}).get('error', '')
@@ -813,7 +901,6 @@ async def proxy_chat_completions(request: Request):
             try:
                 answer = Answer(
                     full_response=collected_data["full_response"],
-                    is_stream=is_stream,
                     status_code=collected_data["status_code"],
                     duration=collected_data["duration"]
                 )
@@ -835,145 +922,42 @@ async def proxy_chat_completions(request: Request):
             save_responce(modified=False, full_responce=answer.full_response)
             tools_list = ",".join([tc.get("function", {}).get("name", "") for tc in answer.tool_calls if "function" in tc])
             print(f"{datetime.now().isoformat()} | ANS | size={len(str(answer.full_response))} | status={answer.status_code} | {tools_list} | duration={answer.duration:.2f}s")
-            
-            # Устанавливаем workspace_path если есть
-            if hasattr(request_processor, 'workspace_path'):
-                answer.workspace_path = request_processor.workspace_path
-            
-            # ✅ ОБРАБОТКА ОТВЕТА (исправление форматирования и т.д.)
-            # [DEBUG] Показываем, что передаём в answer_processor.process()
-            print(f"[DEBUG proxy] calling answer_processor.process(answer)")
-            process_result = answer_processor.process(answer)
         
-        else:
-            # ✅ ОБРАБОТКА ОТВЕТА (исправление форматирования и т.д.)
-            # [DEBUG] Показываем, что передаём в answer_processor.process()
-            print(f"[DEBUG proxy] calling answer_processor.process(answer, data)")
-            process_result = answer_processor.process(_original_response_text, data=pending_data)
-            _process_request_pending = {}
+        # ✅ ОБРАБОТКА ОТВЕТА (исправление форматирования и т.д.)
+        # [DEBUG] Показываем, что передаём в answer_processor.process()
+        print(f"[DEBUG proxy] calling answer_processor.process(answer)")
+        process_result = answer_processor.process(answer, data=pending_data)
 
         # Обработка действия от процессора
         if isinstance(process_result, dict):
             action = process_result.get("action")
-            
             func_path = process_result.get("path")
             func_name = process_result.get("function_name")
 
-            if action == "request_file":
+            if action in ["request_file","request_function"]:
                 # Нужно отправить read_file клиенту
                 path = process_result.get("path")
                 fn_name = process_result.get("function_name")
-                full_code = process_result.get("full_code")
-                
-                _original_response_text = json.dumps(answer)
-                print(f"[DEBUG] Сохранен оригинальный ответ перед подменой на read_file")
 
-                # Формируем сообщение с read_file для клиента
-                read_file_tc = {
-                    "id": f"call_req_file_{int(time.time() * 1000)}",
-                    "type": "function",
-                    "function": {
-                        "name": "read_file",
-                        "arguments": json.dumps({
-                            "path": path,
-                            "offset": 1,
-                            "mode": "slice"
-                        })
-                    }
-                }
-                
-                # Заменяем tool_calls на read_file
-                answer.tool_calls = [read_file_tc]
-                
-                # Сохраняем context для следующей итерации
-                print(f"[DEBUG proxy] Сохраняем context для следующей итерации")
                 _process_request_pending = {
                     "action": action,
                     "path": path,
                     "function_name": fn_name,
+                    "original_response": copy.deepcopy(answer),
                     "data": None
                 }
+                continue
+            elif action == "retry_with_llm":
+                # Нужно отправить сообщение в LLM для исправления
+                retry_message = process_result.get("message")
+                # Добавляем в историю и продолжаем цикл
+                current_body["messages"].append(retry_message)
+                correction_attempt += 1
+                continue  # Повторяем запрос к LLM
                 
-                # Перезаписываем full_response чтобы client получил read_file
-                answer.full_response["choices"][0]["message"]["tool_calls"] = [read_file_tc]
-            
-            elif action == "request_function":
-                # Запрос содержимого функции в файле
-                print(f"[DEBUG proxy] Получен запрос на содержимое функции '{func_name}' в файле '{func_path}'")
-                
-                # Сначала проверяем - есть ли данные в текущем запросе
-                extracted = _extract_file_content_from_request(body, func_path)
-                if extracted is not None:
-                    print(f"[DEBUG proxy] Найдены данные для файла '{func_path}' в запросе клиента")
-                    
-                    # Проверяем целостность функции
-                    pending_info = {
-                        "path": func_path,
-                        "function_name": func_name
-                    }
-                    if check_function_sufficiency(extracted, func_name):
-                        print(f"[DEBUG proxy] Функция '{func_name}' целая, используем данные из запроса")
-                        function_body = check_function_sufficiency(extracted, func_name)
-                        if function_body:
-                            print(f"[DEBUG proxy] Функция '{func_name}' целая, передаем в process()")
-                        process_result = answer_processor.process(answer, data=function_body)
-                        break
-                    else:
-                        print(f"[DEBUG proxy] Функция '{func_name}' НЕ целая, отправляем read_file клиенту")
-                        read_file_tc = {
-                            "id": f"call_req_func_{int(time.time() * 1000)}",
-                            "type": "function",
-                            "function": {
-                                "name": "read_file",
-                                "arguments": json.dumps({
-                                    "path": func_path,
-                                    "offset": 1,
-                                    "mode": "slice"
-                                })
-                            }
-                        }
-                        
-                        # Сохраняем context для следующей итерации
-                        print(f"[DEBUG proxy] Сохраняем context для следующей итерации")
-                        _process_request_pending = {
-                            "action": action,
-                            "path": func_path,
-                            "function_name": func_name,
-                            "data": None
-                        }
-
-                        answer.tool_calls = [read_file_tc]
-                        answer.full_response["choices"][0]["message"]["tool_calls"] = [read_file_tc]
-                else:
-                    print(f"[DEBUG proxy] Данные для файла '{func_path}' НЕ найдены в запросе, отправляем read_file клиенту")
-                    read_file_tc = {
-                        "id": f"call_req_func_{int(time.time() * 1000)}",
-                        "type": "function",
-                        "function": {
-                            "name": "read_file",
-                            "arguments": json.dumps({
-                                "path": func_path,
-                                "offset": 1,
-                                "mode": "slice"
-                            })
-                        }
-                    }
-                    
-                    # Сохраняем context для следующей итерации
-                    print(f"[DEBUG proxy] Сохраняем context для следующей итерации")
-                    _process_request_pending = {
-                        "action": action,
-                        "path": func_path,
-                        "function_name": func_name,
-                        "data": None
-                    }
-
-                    answer.tool_calls = [read_file_tc]
-                    answer.full_response["choices"][0]["message"]["tool_calls"] = [read_file_tc]
-
-        # Если process вернул None, продолжаем как обычно
-        elif process_result is None:
-            pass
+            else:
+                # Неизвестное действие - логируем и продолжаем
+                print(f"⚠️ Unknown action: {action}")
 
         # ✅ ПРОВЕРКА СУЩЕСТВОВАНИЯ TOOL CALLS
         is_valid, invalid_tools = answer_processor.validate_tool_calls_exist(
@@ -1001,16 +985,8 @@ async def proxy_chat_completions(request: Request):
         )
         
         # Логируем correction запрос через log_modified_request (файл) + консоль (метаданные)
-        log_modified_request(
-            method=request.method,
-            url=str(request.url),
-            headers=headers,
-            modifications=[f"self-correction attempt {correction_attempt}: added error message for invalid tools"]
-        )
         print(f"{datetime.now().isoformat()} | correction | attempt={correction_attempt} | invalid_tools={len(invalid_tools)}")
         
-        # Продолжаем цикл с новым запросом
-    
     # Отправка ответа клиенту
     if final_answer is None:
         final_answer = answer

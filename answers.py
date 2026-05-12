@@ -5,6 +5,7 @@ import time
 import copy
 import os
 import yaml
+import handlers
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
 from log import log_response, log_retry_attempt
@@ -465,28 +466,52 @@ class AnswerProcessor:
         return {"path": path, "diff": '\n'.join(diff_lines)}
 
     def validate_tool_calls_exist(
-
         self, 
         tool_calls: List[Dict], 
         available_tools: List[str]
     ) -> Tuple[bool, List[Dict]]:
         """
         Проверяет, существуют ли вызываемые инструменты.
-        
-        Returns:
-            (is_valid, invalid_tool_calls)
+        Учитывает множественные определения инструментов в конфигурации.
         """
         invalid = []
         
         for tc in tool_calls:
             tool_name = tc.get("function", {}).get("name", "")
+            tool_call_id = tc.get("id", "unknown")
             
+            # Получаем конфигурацию для инструмента
+            tool_config = self.tools_config.get(tool_name, True)
+            
+            # Проверяем существование с учетом множественных определений
+            exists = False
+            
+            if isinstance(tool_config, list):
+                # Если это список - инструмент существует (множественные определения)
+                # read_file: [false, true] -> exists = True
+                exists = True
+            else:
+                exists = bool(tool_config)
+            
+            # Проверяем, есть ли инструмент в available_tools
             if tool_name not in available_tools:
                 invalid.append({
                     "tool_call": tc,
                     "tool_name": tool_name,
-                    "tool_call_id": tc.get("id", "unknown")
+                    "tool_call_id": tool_call_id,
+                    "available_tools": available_tools,
+                    "config_value": tool_config,
+                    "reason": f"tool '{tool_name}' not in available_tools list"
                 })
+        
+        # ВЫВОД ТОЛЬКО ПРИ ОШИБКАХ
+        if invalid:
+            print(f"\n❌ НЕСУЩЕСТВУЮЩИЕ ИНСТРУМЕНТЫ:")
+            print(f"   Всего: {len(invalid)}")
+            for inv in invalid:
+                print(f"   - {inv['tool_name']} (ID: {inv['tool_call_id']})")
+                print(f"     Причина: {inv['reason']}")
+                print(f"     Доступные инструменты: {inv['available_tools']}")
         
         return len(invalid) == 0, invalid
 
@@ -494,7 +519,7 @@ class AnswerProcessor:
         """Сброс состояния"""
         self._was_changed = False
         self.changes_log = []
-    
+
     def _decode_unicode_escapes(self, text: str) -> str:
         """
         Декодирует Unicode escape последовательности в тексте.
@@ -532,72 +557,7 @@ class AnswerProcessor:
             return self._decode_unicode_escapes(obj)
         else:
             return obj
-    
-    def _should_retry(self, validation_result: Dict) -> Tuple[bool, List[Dict], List[Dict]]:
-        """
-        Определяет, нужно ли отправлять на retry на основе результатов валидации.
-        Классифицирует ошибки на content issues и formatting issues.
-        
-        Args:
-            validation_result: Результат validate_apply_diff
-            
-        Returns:
-            Tuple[bool, List[Dict], List[Dict]]: 
-            - нужно ли retry
-            - список content issues
-            - список formatting issues
-        """
-        if validation_result["is_valid"]:
-            return False, [], []
-        
-        content_issues = []
-        formatting_issues = []
-        
-        # Категории ошибок
-        CONTENT_ERROR_TYPES = [
-            "content_mismatch",
-            "file_not_found",
-            "range_out_of_bounds",
-            "identical_blocks",
-            "file_read_error",
-            "no_workspace"
-        ]
-        
-        FORMATTING_ERROR_TYPES = [
-            "missing_search_block",
-            "missing_start_line",
-            "missing_separator",
-            "empty_replace",
-            "wrong_search_marker",
-            "wrong_replace_marker",
-            "duplicate_separators",
-            "malformed_start_line",
-            "missing_end_line",
-            "invalid_json",
-            "invalid_arguments",
-            "missing_path",
-            "missing_diff"
-        ]
-        
-        for error in validation_result.get("errors", []):
-            error_type = error.get("type", "")
-            
-            if error_type in CONTENT_ERROR_TYPES:
-                error["category"] = "content"
-                content_issues.append(error)
-            elif error_type in FORMATTING_ERROR_TYPES:
-                error["category"] = "formatting"
-                formatting_issues.append(error)
-            else:
-                # Неизвестный тип ошибки - считаем форматированием для безопасности
-                error["category"] = "formatting"
-                formatting_issues.append(error)
-        
-        # Retry нужен, если есть любые ошибки (и content, и formatting)
-        retry_needed = len(content_issues) > 0 or len(formatting_issues) > 0
-        
-        return retry_needed, content_issues, formatting_issues
-    
+
     def generate_retry_message(self, validation_result: Dict, content_issues: List[Dict], 
                               formatting_issues: List[Dict], attempt_count: int = 0) -> Dict:
         """
@@ -764,320 +724,6 @@ class AnswerProcessor:
         }
         
         return result
-    
-    def validate_apply_diff(self, tc: dict, debug: bool = False) -> Dict[str, Any]:
-        """
-        Валидирует apply_diff.
-        tc["function"]["arguments"] уже dict!
-        """
-        result = {
-            "is_valid": True,
-            "errors": [],
-            "file_info": {},
-            "diff_info": {},
-            "mismatch_details": {}
-        }
-        
-        if tc["function"]["name"] != "apply_diff":
-            return result
-        
-        args = tc["function"]["arguments"]
-        
-        # Уже должно быть dict
-        if not isinstance(args, dict):
-            result["is_valid"] = False
-            result["errors"].append({
-                "type": "invalid_arguments",
-                "message": "Аргументы должны быть объектом"
-            })
-            return result
-        
-        # Проверяем наличие path
-        if "path" not in args:
-            result["is_valid"] = False
-            result["errors"].append({
-                "type": "missing_path",
-                "message": "Отсутствует обязательный параметр path"
-            })
-        else:
-            result["file_info"]["path"] = args["path"]
-        
-        # Проверяем наличие diff
-        if "diff" not in args:
-            result["is_valid"] = False
-            result["errors"].append({
-                "type": "missing_diff",
-                "message": "Отсутствует обязательный параметр diff"
-            })
-            return result
-        
-        diff_text = args["diff"]
-        result["diff_info"]["raw_diff"] = diff_text
-        
-        # Парсим diff
-        lines = diff_text.split('\n')
-        
-        # Инициализируем информацию о diff
-        diff_info = {
-            "has_search_block": False,
-            "has_start_line": False,
-            "has_end_line": False,
-            "has_separator": False,
-            "search_content": "",
-            "replace_content": "",
-            "search_marker": None,
-            "replace_marker": None,
-            "separator_marker": None
-        }
-        
-        in_search = False
-        in_replace = False
-        search_lines = []
-        replace_lines = []
-        start_line = 1
-        end_line = None
-        
-        for i, line in enumerate(lines):
-            line_stripped = line.strip()
-            
-            # Проверяем маркеры (с поддержкой различных вариантов)
-            if re.match(r'^<<<<<<< SEARCH$|^\[?SEARCH\]?$|^\[?SOURCE\]?$|^\[?SRC\]?$', line_stripped, re.IGNORECASE):
-                in_search = True
-                in_replace = False
-                diff_info["has_search_block"] = True
-                diff_info["search_marker"] = line_stripped
-                
-                # Проверяем, правильный ли маркер
-                if line_stripped != "<<<<<<< SEARCH":
-                    result["errors"].append({
-                        "type": "wrong_search_marker",
-                        "message": f"Неправильный маркер поиска: '{line_stripped}', должен быть '<<<<<<< SEARCH'",
-                        "line": i,
-                        "found": line_stripped,
-                        "expected": "<<<<<<< SEARCH"
-                    })
-                continue
-                
-            elif re.match(r'^=======$|^\[?=======\]?$|^-{3,}$|^={3,}$', line_stripped):
-                in_search = False
-                in_replace = True
-                diff_info["has_separator"] = True
-                diff_info["separator_marker"] = line_stripped
-                
-                # Проверяем, правильный ли разделитель
-                if line_stripped != "=======":
-                    result["errors"].append({
-                        "type": "wrong_separator",
-                        "message": f"Неправильный разделитель: '{line_stripped}', должен быть '======='",
-                        "line": i,
-                        "found": line_stripped,
-                        "expected": "======="
-                    })
-                continue
-                
-            elif re.match(r'^>>>>>>> REPLACE$|^\[?REPLACE\]?$|^REPLACE$|^>+ REPLACE$', line_stripped, re.IGNORECASE):
-                in_replace = False
-                diff_info["replace_marker"] = line_stripped
-                
-                # Проверяем, правильный ли маркер
-                if line_stripped != ">>>>>>> REPLACE":
-                    result["errors"].append({
-                        "type": "wrong_replace_marker",
-                        "message": f"Неправильный маркер замены: '{line_stripped}', должен быть '>>>>>>> REPLACE'",
-                        "line": i,
-                        "found": line_stripped,
-                        "expected": ">>>>>>> REPLACE"
-                    })
-                continue
-            
-            if in_search:
-                # Проверяем наличие :start_line: и :end_line:
-                if ':start_line:' in line:
-                    match = re.search(r':start_line:\s*(\d+)', line)
-                    if match:
-                        start_line = int(match.group(1))
-                        diff_info["has_start_line"] = True
-                        
-                        # Проверяем формат директивы
-                        if line.strip() != f':start_line:{start_line}':
-                            result["errors"].append({
-                                "type": "malformed_start_line",
-                                "message": f"Неправильный формат :start_line: '{line.strip()}', должен быть ':start_line:{start_line}'",
-                                "line": i,
-                                "found": line.strip(),
-                                "expected": f':start_line:{start_line}'
-                            })
-                    else:
-                        # Есть :start_line: но не удалось распарсить число
-                        result["errors"].append({
-                            "type": "malformed_start_line",
-                            "message": f"Неправильный формат :start_line: '{line.strip()}'",
-                            "line": i,
-                            "found": line.strip()
-                        })
-                elif ':end_line:' in line:
-                    match = re.search(r':end_line:\s*(\d+)', line)
-                    if match:
-                        end_line = int(match.group(1))
-                        diff_info["has_end_line"] = True
-                        
-                        # Проверяем формат директивы
-                        if line.strip() != f':end_line:{end_line}':
-                            result["errors"].append({
-                                "type": "malformed_end_line",
-                                "message": f"Неправильный формат :end_line: '{line.strip()}', должен быть ':end_line:{end_line}'",
-                                "line": i,
-                                "found": line.strip(),
-                                "expected": f':end_line:{end_line}'
-                            })
-                    else:
-                        result["errors"].append({
-                            "type": "malformed_end_line",
-                            "message": f"Неправильный формат :end_line: '{line.strip()}'",
-                            "line": i,
-                            "found": line.strip()
-                        })
-                else:
-                    search_lines.append(line)
-            
-            elif in_replace:
-                replace_lines.append(line)
-        
-        # Проверяем наличие дублирующихся разделителей
-        separator_lines = [i for i, line in enumerate(lines) 
-                          if re.match(r'^={3,}$|^-{3,}$|^>{3,}$|^<{3,}$', line.strip())]
-        
-        for i in range(len(separator_lines) - 1):
-            if separator_lines[i+1] == separator_lines[i] + 1:
-                result["errors"].append({
-                    "type": "duplicate_separators",
-                    "message": f"Обнаружены дублирующиеся разделители на строках {separator_lines[i]} и {separator_lines[i+1]}",
-                    "lines": [separator_lines[i], separator_lines[i+1]]
-                })
-                break
-        
-        # Сохраняем полное содержимое
-        if search_lines:
-            diff_info["search_content"] = '\n'.join(search_lines)
-        if replace_lines:
-            diff_info["replace_content"] = '\n'.join(replace_lines)
-        
-        result["diff_info"] = diff_info
-        result["file_info"]["start_line"] = start_line
-        result["file_info"]["end_line"] = end_line
-        
-        # Проверяем наличие обязательных элементов
-        if not diff_info["has_search_block"]:
-            result["is_valid"] = False
-            result["errors"].append({
-                "type": "missing_search_block",
-                "message": "Отсутствует блок <<<<<<< SEARCH"
-            })
-        
-        if not diff_info["has_start_line"]:
-            result["is_valid"] = False
-            result["errors"].append({
-                "type": "missing_start_line",
-                "message": "Отсутствует :start_line: в SEARCH блоке"
-            })
-        
-        if not diff_info["has_separator"]:
-            result["is_valid"] = False
-            result["errors"].append({
-                "type": "missing_separator",
-                "message": "Отсутствует разделитель ======="
-            })
-        
-        if not replace_lines:
-            result["is_valid"] = False
-            result["errors"].append({
-                "type": "empty_replace",
-                "message": "Блок REPLACE пуст"
-            })
-        
-        # Проверка на идентичность блоков
-        if diff_info["search_content"] and diff_info["replace_content"]:
-            if diff_info["search_content"] == diff_info["replace_content"]:
-                result["is_valid"] = False
-                result["errors"].append({
-                    "type": "identical_blocks",
-                    "message": "SEARCH и REPLACE блоки идентичны - изменения не будут применены",
-                    "search_preview": diff_info["search_content"][:100] + "..." 
-                                      if len(diff_info["search_content"]) > 100 
-                                      else diff_info["search_content"]
-                })
-        
-        # Если есть фатальные ошибки формата, дальше не проверяем
-        fatal_errors = ["missing_search_block", "missing_start_line", "missing_separator", "missing_diff", "missing_path"]
-        has_fatal = any(e["type"] in fatal_errors for e in result["errors"])
-        if has_fatal:
-            return result
-        
-        # Проверяем соответствие файлу
-        if not self.workspace_path:
-            result["errors"].append({
-                "type": "no_workspace",
-                "message": "workspace_path не установлен, пропускаем проверку файла"
-            })
-            return result
-        
-        full_path = os.path.join(self.workspace_path, args["path"])
-        result["file_info"]["full_path"] = full_path
-        
-        try:
-            with open(full_path, 'r', encoding='utf-8') as f:
-                file_lines = f.readlines()
-            
-            # Сохраняем ПОЛНОЕ содержимое файла
-            result["file_info"]["content"] = ''.join(file_lines)
-            result["file_info"]["file_length"] = len(file_lines)
-            
-            # Проверяем, не выходит ли диапазон за границы
-            start_idx = start_line - 1
-            end_idx = end_line if end_line else start_idx + len(search_lines)
-            
-            if end_idx > len(file_lines):
-                result["is_valid"] = False
-                result["errors"].append({
-                    "type": "range_out_of_bounds",
-                    "message": f"Запрошенный диапазон {start_line}-{end_idx} выходит за границы файла (всего {len(file_lines)} строк)",
-                    "file_length": len(file_lines),
-                    "requested_end": end_idx
-                })
-                return result
-            
-            # Извлекаем содержимое файла для сравнения
-            file_content = ''.join(file_lines[start_idx:end_idx]).rstrip('\n')
-            
-            # Сравниваем содержимое
-            if diff_info["search_content"] != file_content:
-                result["is_valid"] = False
-                result["errors"].append({
-                    "type": "content_mismatch",
-                    "message": "SEARCH блок не соответствует содержимому файла"
-                })
-                result["mismatch_details"] = {
-                    "search_content": diff_info["search_content"],
-                    "file_content": file_content,
-                    "start_line": start_line,
-                    "end_line": end_idx
-                }
-        
-        except FileNotFoundError:
-            result["is_valid"] = False
-            result["errors"].append({
-                "type": "file_not_found",
-                "message": f"Файл {args['path']} не найден",
-                "path": full_path
-            })
-        except Exception as e:
-            result["is_valid"] = False
-            result["errors"].append({
-                "type": "file_read_error",
-                "message": f"Ошибка при чтении файла: {str(e)}"
-            })
-        
-        return result
 
     def _unwrap_double_encoding(self, args_str: str, max_depth: int = 10) -> str:
         """
@@ -1132,55 +778,70 @@ class AnswerProcessor:
         # Ни одного успешного парсинга - возвращаем оригинал
         return args_str
 
+    def _load_tools_format_config(self) -> Dict:
+        """Загружает конфиг форматов инструментов"""
+        config_path = "config/tools_format.yaml"
+        try:
+            if os.path.exists(config_path):
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    return config.get('tools', {})
+        except Exception as e:
+            print(f"[-] Ошибка загрузки {config_path}: {e}")
+        return {}
+
+    def _check_field_type(self, value: Any, expected_type: str) -> bool:
+        """Проверяет тип поля"""
+        type_map = {
+            'string': str,
+            'number': (int, float),
+            'integer': int,
+            'boolean': bool,
+            'array': list,
+            'object': dict
+        }
+        expected = type_map.get(expected_type)
+        if not expected:
+            return True
+        return isinstance(value, expected)
+
     def validate_tool_calls(self, answer) -> Tuple[bool, List[Dict]]:
-        """
-        Валидирует все tool calls в ответе.
-        
-        Args:
-            answer: Объект Answer с tool_calls
-            
-        Returns:
-            Tuple[bool, List[Dict]]: (is_valid, errors)
-        """
+        """Валидирует все tool calls в ответе на основе конфига"""
         errors = []
         
-        for tc in answer.tool_calls:
+        # Загружаем конфиг форматов (один раз)
+        if not hasattr(self, '_format_config'):
+            self._format_config = self._load_tools_format_config()
+        
+        for idx, tc in enumerate(answer.tool_calls):
             if 'function' not in tc:
                 errors.append({
                     "tool_call_id": tc.get('id', 'unknown'),
+                    "index": idx,
                     "error": "missing_function",
                     "message": "Tool call missing 'function' field"
                 })
                 continue
             
             func = tc['function']
+            tool_name = func.get('name', 'unknown')
+            tool_call_id = tc.get('id', 'unknown')
             
-            if 'name' not in func:
-                errors.append({
-                    "tool_call_id": tc.get('id', 'unknown'),
-                    "error": "missing_name",
-                    "message": "Function missing 'name' field"
-                })
+            # Получаем формат инструмента из конфига
+            tool_format = self._format_config.get(tool_name, {})
+            required_fields = [f['name'] for f in tool_format.get('fields', []) if f.get('required', False)]
             
-            if 'arguments' not in func:
-                errors.append({
-                    "tool_call_id": tc.get('id', 'unknown'),
-                    "tool_name": func.get('name', 'unknown'),
-                    "error": "missing_arguments",
-                    "message": "Function missing 'arguments' field"
-                })
-                continue
-            
-            args = func['arguments']
+            # Парсим аргументы
+            args = func.get('arguments')
             
             # 1. arguments должен быть строкой
             if not isinstance(args, str):
                 errors.append({
-                    "tool_call_id": tc.get('id', 'unknown'),
-                    "tool_name": func.get('name', 'unknown'),
+                    "tool_call_id": tool_call_id,
+                    "index": idx,
+                    "tool_name": tool_name,
                     "error": "invalid_type",
-                    "message": f"Arguments must be string, got {type(args).__name__}",
-                    "received": str(args)[:200]
+                    "message": f"Arguments must be string, got {type(args).__name__}"
                 })
                 continue
             
@@ -1189,241 +850,58 @@ class AnswerProcessor:
                 parsed = json.loads(args)
             except json.JSONDecodeError as e:
                 errors.append({
-                    "tool_call_id": tc.get('id', 'unknown'),
-                    "tool_name": func.get('name', 'unknown'),
+                    "tool_call_id": tool_call_id,
+                    "index": idx,
+                    "tool_name": tool_name,
                     "error": "invalid_json",
-                    "message": f"Arguments is not valid JSON: {e}",
-                    "received": args[:200]
+                    "message": f"Arguments is not valid JSON: {e}"
                 })
                 continue
             
-            # 3. Распарсенный результат должен быть объектом (dict), не строкой и не массивом
+            # 3. Распарсенный результат должен быть объектом
             if not isinstance(parsed, dict):
                 errors.append({
-                    "tool_call_id": tc.get('id', 'unknown'),
-                    "tool_name": func.get('name', 'unknown'),
+                    "tool_call_id": tool_call_id,
+                    "index": idx,
+                    "tool_name": tool_name,
                     "error": "not_an_object",
-                    "message": f"Arguments must parse to object (dict), got {type(parsed).__name__}",
-                    "parsed_type": type(parsed).__name__,
-                    "parsed_preview": str(parsed)[:200]
+                    "message": f"Arguments must parse to object, got {type(parsed).__name__}"
                 })
                 continue
             
-            # 4. Проверка обязательных полей в зависимости от tool
-            tool_name = func['name']
-            
-            if tool_name == "read_file":
-                if "path" not in parsed:
+            # 4. Проверяем обязательные поля из конфига
+            if required_fields:
+                missing_fields = [f for f in required_fields if f not in parsed]
+                if missing_fields:
                     errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
+                        "tool_call_id": tool_call_id,
+                        "index": idx,
                         "tool_name": tool_name,
                         "error": "missing_required_field",
-                        "message": "Required field 'path' is missing",
-                        "required_fields": ["path"],
-                        "received_fields": list(parsed.keys())
-                    })
-                elif not isinstance(parsed["path"], str):
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "invalid_field_type",
-                        "message": f"Field 'path' must be string, got {type(parsed['path']).__name__}",
-                        "field": "path",
-                        "expected_type": "string",
-                        "received_type": type(parsed['path']).__name__
-                    })
-            
-            elif tool_name == "apply_diff":
-                if "path" not in parsed:
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "missing_required_field",
-                        "message": "Required field 'path' is missing",
-                        "required_fields": ["path", "diff"],
-                        "received_fields": list(parsed.keys())
-                    })
-                elif not isinstance(parsed["path"], str):
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "invalid_field_type",
-                        "message": f"Field 'path' must be string, got {type(parsed['path']).__name__}",
-                        "field": "path"
-                    })
-                
-                if "diff" not in parsed:
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "missing_required_field",
-                        "message": "Required field 'diff' is missing",
-                        "required_fields": ["path", "diff"],
-                        "received_fields": list(parsed.keys())
-                    })
-                elif not isinstance(parsed["diff"], str):
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "invalid_field_type",
-                        "message": f"Field 'diff' must be string, got {type(parsed['diff']).__name__}",
-                        "field": "diff"
-                    })
-            
-            elif tool_name == "list_files":
-                if "path" not in parsed:
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "missing_required_field",
-                        "message": "Required field 'path' is missing",
-                        "required_fields": ["path", "recursive"],
-                        "received_fields": list(parsed.keys())
-                    })
-                
-                if "recursive" not in parsed:
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "missing_required_field",
-                        "message": "Required field 'recursive' is missing",
-                        "required_fields": ["path", "recursive"],
-                        "received_fields": list(parsed.keys())
-                    })
-                elif not isinstance(parsed["recursive"], bool):
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "invalid_field_type",
-                        "message": f"Field 'recursive' must be boolean, got {type(parsed['recursive']).__name__}",
-                        "field": "recursive",
-                        "expected_type": "boolean",
-                        "received_type": type(parsed['recursive']).__name__
-                    })
-            
-            elif tool_name == "execute_command":
-                if "command" not in parsed:
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "missing_required_field",
-                        "message": "Required field 'command' is missing",
-                        "required_fields": ["command"],
-                        "received_fields": list(parsed.keys())
-                    })
-                elif not isinstance(parsed["command"], str):
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "invalid_field_type",
-                        "message": f"Field 'command' must be string, got {type(parsed['command']).__name__}",
-                        "field": "command"
-                    })
-            
-            elif tool_name == "write_to_file":
-                if "path" not in parsed:
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "missing_required_field",
-                        "message": "Required field 'path' is missing",
-                        "required_fields": ["path", "content"],
-                        "received_fields": list(parsed.keys())
-                    })
-                 
-                if "content" not in parsed:
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "missing_required_field",
-                        "message": "Required field 'content' is missing",
-                        "required_fields": ["path", "content"],
+                        "message": f"Required field(s) missing: {', '.join(missing_fields)}",
+                        "required_fields": required_fields,
+                        "missing_fields": missing_fields,
                         "received_fields": list(parsed.keys())
                     })
             
-            elif tool_name == "function_replace":
-                if "path" not in parsed:
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "missing_required_field",
-                        "message": "Required field 'path' is missing",
-                        "required_fields": ["path", "function", "full_code"],
-                        "received_fields": list(parsed.keys())
-                    })
-                elif not isinstance(parsed["path"], str):
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "invalid_field_type",
-                        "message": f"Field 'path' must be string, got {type(parsed['path']).__name__}",
-                        "field": "path"
-                    })
-                
-                if "function" not in parsed:
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "missing_required_field",
-                        "message": "Required field 'function' is missing",
-                        "required_fields": ["path", "function", "full_code"],
-                        "received_fields": list(parsed.keys())
-                    })
-                elif not isinstance(parsed["function"], str):
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "invalid_field_type",
-                        "message": f"Field 'function' must be string, got {type(parsed['function']).__name__}",
-                        "field": "function"
-                    })
-                
-                if "full_code" not in parsed:
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "missing_required_field",
-                        "message": "Required field 'full_code' is missing",
-                        "required_fields": ["path", "function", "full_code"],
-                        "received_fields": list(parsed.keys())
-                    })
-                elif not isinstance(parsed["full_code"], str):
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "invalid_field_type",
-                        "message": f"Field 'full_code' must be string, got {type(parsed['full_code']).__name__}",
-                        "field": "full_code"
-                    })
-            
-            elif tool_name == "ask_followup_question":
-                if "question" not in parsed:
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "missing_required_field",
-                        "message": "Required field 'question' is missing",
-                        "required_fields": ["question", "follow_up"],
-                        "received_fields": list(parsed.keys())
-                    })
-                
-                if "follow_up" not in parsed:
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "missing_required_field",
-                        "message": "Required field 'follow_up' is missing",
-                        "required_fields": ["question", "follow_up"],
-                        "received_fields": list(parsed.keys())
-                    })
-                elif not isinstance(parsed["follow_up"], list):
-                    errors.append({
-                        "tool_call_id": tc.get('id', 'unknown'),
-                        "tool_name": tool_name,
-                        "error": "invalid_field_type",
-                        "message": f"Field 'follow_up' must be array, got {type(parsed['follow_up']).__name__}",
-                        "field": "follow_up"
-                    })
+            # 5. Проверяем типы полей (опционально)
+            for field_config in tool_format.get('fields', []):
+                field_name = field_config['name']
+                if field_name in parsed:
+                    expected_type = field_config.get('type')
+                    if expected_type:
+                        actual_value = parsed[field_name]
+                        if not self._check_field_type(actual_value, expected_type):
+                            errors.append({
+                                "tool_call_id": tool_call_id,
+                                "index": idx,
+                                "tool_name": tool_name,
+                                "error": "invalid_field_type",
+                                "message": f"Field '{field_name}' must be {expected_type}, got {type(actual_value).__name__}",
+                                "field": field_name,
+                                "expected_type": expected_type,
+                                "received_type": type(actual_value).__name__
+                            })
         
         return len(errors) == 0, errors
 
@@ -1436,16 +914,21 @@ class AnswerProcessor:
             request_body: Тело запроса для извлечения file_lines (опционально)
         """
         
-        if 'function' not in tc:
-            raise ValueError(f"Tool call at index {index} missing 'function' field")
-        
+        handlers.validate_fields(
+            func_name="AnswerProcessor.process_single_tool_call",
+            obj_name=f"tool_call[{index}]",
+            data=tc,
+            fields=['function', 'id']  # id тоже полезно проверить
+        )
+
         func = tc['function']
-        if 'name' not in func:
-            raise ValueError(f"Tool call at index {index} missing 'name' field in function")
-        
-        if 'arguments' not in func:
-            raise ValueError(f"Tool call at index {index} missing 'arguments' field in function")
-        
+        handlers.validate_fields(
+            func_name="AnswerProcessor.process_single_tool_call",
+            obj_name=f"function in tool_call[{index}]",
+            data=func,
+            fields=['name', 'arguments']
+        )
+
         tool_name = func['name']
         tool_call_id = tc['id']
         parsed_args = func['arguments']  # Уже распарсенный dict
@@ -1544,21 +1027,13 @@ class AnswerProcessor:
             data = {"type":None, "path":None}
         
         # Проверяем обязательные поля в answer
-        if not hasattr(answer, 'full_response'):
-            raise ValueError("Answer object missing 'full_response' attribute")
-        
-        if not hasattr(answer, 'model'):
-            raise ValueError("Answer object missing 'model' attribute")
-        
-        if not hasattr(answer, 'duration'):
-            raise ValueError("Answer object missing 'duration' attribute")
-        
-        if not hasattr(answer, 'is_stream'):
-            raise ValueError("Answer object missing 'is_stream' attribute")
-        
-        if not hasattr(answer, 'status_code'):
-            raise ValueError("Answer object missing 'status_code' attribute")
-        
+        handlers.validate_fields(
+            func_name="AnswerProcessor.process",
+            obj_name="answer",
+            data=answer,
+            fields=['full_response', 'model', 'duration', 'status_code']
+        )
+
         # Логируем оригинал
         log_response(
             duration=answer.duration,
@@ -1584,12 +1059,30 @@ class AnswerProcessor:
                 tool_name = tc_copy['function']['name']
 
                 # Парсим аргументы
-                parsed_args = self._parse_arguments(
-                    tc_copy['function']['arguments'],
-                    tc_copy['function']['name'],
-                    tc_copy['id']
-                )
-                tc_copy['function']['arguments'] = parsed_args
+                try:
+                    parsed_args = self._parse_arguments(
+                        tc_copy['function']['arguments'],
+                        tc_copy['function']['name'],
+                        tc_copy['id']
+                    )
+                    tc_copy['function']['arguments'] = parsed_args
+                except ArgumentParseError as e:
+                    # Логируем ошибку в консоль
+                    print(f"\n❌ ОШИБКА ПАРСИНГА АРГУМЕНТОВ")
+                    print(f"   Tool: {e.tool_name}")
+                    print(f"   ID: {e.tool_call_id}")
+                    print(f"   Ошибка: {e}")
+                    print(f"   Аргументы: {e.original_args[:200] if e.original_args else 'None'}...")
+                    
+                    # Отправляем сообщение в LLM через существующий механизм retry
+                    error_message = self._send_parse_error_to_llm(answer, e, tc['id'])
+                    
+                    # Возвращаем action для proxy.py
+                    return {
+                        'action': 'retry_with_llm',
+                        'message': error_message,
+                        'tool_call_id': tc['id']
+                    }
                 
                 if self.progress[tc['id']] == "current":
                     
@@ -1619,9 +1112,9 @@ class AnswerProcessor:
                     
                     self.progress[tc['id']] = "completed"
 
-                if changed:
-                    self._was_changed = True
-                    self.changes_log.extend(changes)
+                #if changed:
+                #    self._was_changed = True
+                #    self.changes_log.extend(changes)
             
             # Обновляем full_response если были изменения
             if self._was_changed:
@@ -1917,23 +1410,37 @@ class AnswerProcessor:
 
     def _fix_followup_question(self, parsed_args: dict) -> bool:
         """
-        Исправляет follow_up в ask_followup_question из строки в массив.
+        Исправляет follow_up в ask_followup_question.
         
-        Args:
-            parsed_args: Dict с аргументами (уже распарсенными)
-            
-        Returns:
-            True если были изменения, иначе False
+        Преобразует:
+        1. Строку с JSON-массивом -> массив объектов
+        2. Массив строк -> массив объектов {text: "...", mode: null}
         """
-        if "follow_up" in parsed_args and isinstance(parsed_args["follow_up"], str):
+        if "follow_up" not in parsed_args:
+            return False
+        
+        follow_up = parsed_args["follow_up"]
+        
+        # Case 1: это строка с JSON
+        if isinstance(follow_up, str):
             try:
-                parsed = json.loads(parsed_args["follow_up"])
+                parsed = json.loads(follow_up)
                 if isinstance(parsed, list):
-                    parsed_args["follow_up"] = parsed
+                    parsed_args["follow_up"] = self._normalize_follow_up_array(parsed)
                     return True
             except json.JSONDecodeError:
                 pass
+        
+        # Case 2: это массив строк
+        elif isinstance(follow_up, list) and follow_up and isinstance(follow_up[0], str):
+            parsed_args["follow_up"] = self._normalize_follow_up_array(follow_up)
+            return True
+        
         return False
+
+    def _normalize_follow_up_array(self, arr: list) -> list:
+        """Преобразует массив строк в массив объектов {text: "...", mode: null}"""
+        return [{"text": item, "mode": None} for item in arr]
 
     def _add_mode_slice_to_read_file(self, parsed_args: dict) -> bool:
         """
@@ -2283,4 +1790,50 @@ class AnswerProcessor:
         
         return '\n'.join(result)
 
-    
+    def _send_parse_error_to_llm(self, answer, error: ArgumentParseError, tool_call_id: str) -> Dict:
+        """
+        Формирует сообщение для отправки в LLM при ошибке парсинга аргументов.
+        
+        Args:
+            answer: Объект Answer
+            error: Исключение ArgumentParseError
+            tool_call_id: ID tool call, который не удалось распарсить
+            
+        Returns:
+            Dict с сообщением для добавления в историю
+        """
+        # Простое дружественное сообщение
+        error_message = f"""❌ Не удалось обработать ваш tool call `{error.tool_name}`. Пожалуйста, попробуйте сформулировать запрос по-другому.
+
+    **Проблема:** {str(error)}
+
+    **Что делать:** Проверьте синтаксис аргументов и попробуйте еще раз.
+    """
+        
+        # Логируем ошибку в консоль
+        timestamp = datetime.now().isoformat()
+        print(f"\n{'='*60}")
+        print(f"❌ ОШИБКА ПАРСИНГА АРГУМЕНТОВ")
+        print(f"{'='*60}")
+        print(f"📅 Время: {timestamp}")
+        print(f"🔧 Tool: {error.tool_name}")
+        print(f"🆔 Tool Call ID: {error.tool_call_id}")
+        print(f"📝 Ошибка: {error}")
+        print(f"\n📄 Аргументы (первые 500 символов):")
+        print(f"{'-'*40}")
+        print(f"{error.original_args[:500] if error.original_args else 'None'}")
+        if error.original_args and len(error.original_args) > 500:
+            print(f"... (и еще {len(error.original_args) - 500} символов)")
+        print(f"{'-'*40}")
+        print(f"🤖 Модель: {answer.model}")
+        print(f"💬 Conversation ID: {self.conversation_id or 'unknown'}")
+        print(f"\n📤 Отправляем запрос на переформулирование в LLM...")
+        print(f"{'='*60}\n")
+        
+        # Создаем сообщение для добавления в историю
+        retry_message = {
+            "role": "user",
+            "content": error_message
+        }
+        
+        return retry_message

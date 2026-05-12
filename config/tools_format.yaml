@@ -4,19 +4,11 @@
 tools:
   apply_diff:
     fields:
-      - name: filePath
+      - name: path
         type: string
         required: true
-      - name: search
+      - name: diff
         type: string
-        required: true
-      - name: replace
-        type: string
-        required: true
-      - name: offset
-        type: number
-        required: false
-        default: 0
     description: "Применяет изменения к файлу"
 
   read_file:
@@ -75,7 +67,7 @@ tools:
         type: string
         required: true
       - name: follow_up
-        type: string
+        type: list
         required: true
 
   attempt_completion:

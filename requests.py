@@ -6,7 +6,6 @@ import os
 import yaml
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable
-from log import log_request, log_modified_request
 from scanner import ProjectStructureScanner
 
 
@@ -28,7 +27,7 @@ class RequestProcessor:
     # Объединенный паттерн для поиска
     MARKER_REGEX = re.compile('|'.join(MARKER_PATTERNS))
     
-    def __init__(self, workspace_path: Optional[str] = None, config_path: str = "config/tools.yaml"):
+    def __init__(self, config_path: str = "config/tools.yaml"):
         """
         Инициализация процессора запросов
         
@@ -55,9 +54,6 @@ class RequestProcessor:
         
         # Путь к рабочей директории и сканер структуры проекта
         self.config_path = config_path
-        self.workspace_path = workspace_path
-        self.scanner = ProjectStructureScanner() if workspace_path else None
-        self._cached_structure: Optional[str] = None  # Кэш структуры проекта
         
         # Загружаем конфигурацию инструментов из config/tools.yaml
         self.tools_config = self._load_tools_config(config_path)
@@ -74,6 +70,26 @@ class RequestProcessor:
         """
         correction_body = copy.deepcopy(original_body)
         
+        # Получаем индексы сообщений assistant с невалидными tool calls
+        messages = correction_body.get("messages", [])
+        indices_to_remove = []
+        
+        # Находим сообщения assistant с невалидными tool calls
+        for i, msg in enumerate(messages):
+            if msg.get("role") == "assistant" and "tool_calls" in msg:
+                tool_calls = msg.get("tool_calls", [])
+                for tc in tool_calls:
+                    tool_name = tc.get("function", {}).get("name", "")
+                    # Проверяем, является ли этот tool call невалидным
+                    for invalid in invalid_tool_calls:
+                        if tc.get("id") == invalid.get("tool_call_id"):
+                            indices_to_remove.append(i)
+                            break
+        
+        # Удаляем найденные сообщения (в обратном порядке, чтобы не сбить индексы)
+        for idx in sorted(indices_to_remove, reverse=True):
+            del messages[idx]
+
         # Формируем сообщение об ошибке
         tool_names = [item["tool_name"] for item in invalid_tool_calls]
         tools_list = "\n".join([f"  - {tool}" for tool in available_tools])
@@ -221,17 +237,11 @@ class RequestProcessor:
                 tools = config.get("tools")
                 if tools and isinstance(tools, dict):
                     for tool_name, tool_enabled in tools.items():
-                        tools_config[tool_name] = bool(tool_enabled)
+                        tools_config[tool_name] = tool_enabled
                 
-                if tools_config:
-                    self.changes_log.append(f"📋 Загружена конфигурация инструментов из {config_path}")
-                    return tools_config
-                else:
-                    self.changes_log.append(f"⚠️ Секция 'tools' пуста или отсутствует в {config_path}, используются настройки по умолчанию")
-                    return default_config
-            else:
-                self.changes_log.append(f"⚠️ Файл {config_path} не найден, используются настройки по умолчанию")
-                return default_config
+                self.changes_log.append(f"📋 Загружена конфигурация инструментов из {config_path}")
+
+                return tools_config
                 
         except Exception as e:
             self.changes_log.append(f"❌ Ошибка загрузки {config_path}: {str(e)}")
@@ -242,6 +252,8 @@ class RequestProcessor:
         """
         Фильтрует инструменты согласно конфигурации из config/tools.yaml
         Оставляет только инструменты со значением True
+        Поддерживает список значений для множественного определения инструментов:
+        [false, true] - первое вхождение удаляется, второе оставляется
         
         Args:
             tools: Исходный список инструментов
@@ -255,11 +267,26 @@ class RequestProcessor:
         filtered_tools = []
         removed_tools = []
         
+        # Счетчики для списков значений (для индексации вхождений)
+        occurrence_counts: Dict[str, int] = {}
+        
         for tool in tools:
             tool_name = tool.get("function", {}).get("name", "")
             
-            # Проверяем, включен ли инструмент в конфигурации
-            if self.tools_config.get(tool_name, True):  # По умолчанию True, если не указано
+            # Получаем конфигурацию для инструмента
+            tool_config = self.tools_config.get(tool_name, True)
+
+            # Поддержка списка значений для множественного определения
+            if isinstance(tool_config, list):
+                occurrence_counts[tool_name] = occurrence_counts.get(tool_name, 0) + 1
+                index = occurrence_counts[tool_name] - 1
+                print(f"[DEBUG] Tool: {tool_name}, config: {tool_config}, index: {index if isinstance(tool_config, list) else 'N/A'}")
+                # Если индекс в пределах списка и значение True - оставляем
+                if index < len(tool_config) and tool_config[index]:
+                    filtered_tools.append(tool)
+                else:
+                    removed_tools.append(tool_name)
+            elif tool_config:  # Обычное булево значение
                 filtered_tools.append(tool)
             else:
                 removed_tools.append(tool_name)
@@ -279,61 +306,6 @@ class RequestProcessor:
         """Сброс состояния"""
         self._was_changed = False
         self.changes_log = []
-    
-    def _get_project_structure(self) -> Optional[str]:
-        """
-        Получает структуру проекта через scanner.py.
-        Кэширует результат для производительности.
-        
-        Returns:
-            String с деревом структуры проекта или None если сканирование невозможно
-        """
-        if not self.workspace_path or not self.scanner:
-            return None
-        
-        # Если структура уже закэширована, возвращаем её
-        if self._cached_structure is not None:
-            return self._cached_structure
-        
-        try:
-            # Проверяем, существует ли директория
-            if not os.path.isdir(self.workspace_path):
-                self.changes_log.append(f"⚠️ Путь не существует: {self.workspace_path}")
-                return None
-            
-            # Сканируем структуру проекта
-            structure = self.scanner.scan(self.workspace_path, lang="python")
-            
-            # Кэшируем результат
-            self._cached_structure = structure
-            self.changes_log.append("📁 Добавлена структура проекта в запрос")
-            
-            return structure
-            
-        except Exception as e:
-            self.changes_log.append(f"❌ Ошибка сканирования структуры: {str(e)}")
-            return None
-    
-    def _add_project_structure_to_request(self, body: dict) -> bool:
-        """
-        Добавляет структуру проекта как отдельное поле в корне запроса перед messages.
-        
-        Args:
-            body: Тело запроса для модификации
-            
-        Returns:
-            bool: Были ли изменения
-        """
-        structure = self._get_project_structure()
-        if not structure:
-            return False
-        
-        # Добавляем структуру как отдельное поле в корне JSON
-        body["project_structure"] = structure
-        
-        self.changes_log.append("📋 Структура проекта добавлена в корень запроса")
-        self._was_changed = True
-        return True
 
     def _remove_markers(self, text: str) -> str:
         """
@@ -679,7 +651,7 @@ class RequestProcessor:
         
         return changed
     
-    def process(self, body: dict, method: str = "POST", url: str = "/v1/chat/completions", headers: dict = None) -> dict:
+    def process(self, body: dict):
         """
         Обрабатывает тело запроса: логирует, модифицирует, удаляет системные промпты,
         добавляет структуру проекта, оптимизирует описания инструментов.
@@ -693,20 +665,11 @@ class RequestProcessor:
         Returns:
             Модифицированное тело запроса
         """
-        if headers is None:
-            headers = {}
         
         self.reset()
-        
-        # Логируем оригинальный запрос
-        log_request(
-            method=method,
-            url=url,
-            headers=headers
-        )
-        
+    
         # Сохраняем исходный запрос в requests/
-        self._save_original_request(body, method, url, headers)
+        self._save_original_request(body)
         
         # Делаем глубокую копию, чтобы не изменять оригинал
         modified_body = copy.deepcopy(body)
@@ -727,13 +690,6 @@ class RequestProcessor:
             }
         
         self.model_stats[model]["requests"] += 1
-
-        # ✅ ДОБАВЛЯЕМ СТРУКТУРУ ПРОЕКТА В КОРЕНЬ ЗАПРОСА (перед messages)
-        if self.workspace_path:
-            structure_added = self._add_project_structure_to_request(modified_body)
-            if structure_added:
-                self._was_changed = True
-                modifications.append("📁 Добавлена структура проекта в корень запроса")
 
         # Обрабатываем messages (удаление маркеров, оптимизация промптов)
         if "messages" in modified_body:
@@ -791,22 +747,46 @@ class RequestProcessor:
 
         # Логируем модифицированный запрос, если были изменения
         if self._was_changed:
-            log_modified_request(
-                method=method,
-                url=url,
-                headers=headers,
-                modifications=modifications
-            )
-            
             # Сохраняем модифицированный запрос в requests/
-            self._save_modified_request(modified_body, modifications, method, url, headers)
+            self._save_modified_request(modified_body, modifications)
             
             # Добавляем в общий лог изменений
             self.changes_log.extend(modifications)
         
         return modified_body
 
-    def _save_original_request(self, body: dict, method: str, url: str, headers: dict) -> None:
+    def _detect_failed_apply_diff(self, messages: List[Dict]) -> None:
+        """
+        Анализирует сообщения на наличие неудачного apply_diff.
+        Выводит сообщение в консоль при обнаружении.
+        """
+        # Паттерны для поиска сообщений о неудачном apply_diff
+        FAILED_APPLY_PATTERNS = [
+            r'apply_diff.*не удалось',
+            r'apply_diff.*failed',
+            r'apply_diff.*error',
+            r'Failed to apply.*diff',
+            r'Ошибка применения.*apply_diff',
+            r'Content mismatch.*apply_diff',
+            r'Search block.*not found',
+            r'не удалось применить изменения',
+            r'apply_diff.*не применён',
+        ]
+        
+        combined_pattern = re.compile('|'.join(FAILED_APPLY_PATTERNS), re.IGNORECASE)
+        
+        for i, message in enumerate(messages):
+            if message.get("role") == "user" and "content" in message:
+                content = message["content"]
+                if isinstance(content, str) and combined_pattern.search(content):
+                    print(f"\n⚠️ UNSUCCESSFUL apply_diff DETECTED in client request")
+                    print(f"   Message {i}: {message.get('role', 'unknown')}")
+                    preview = content[:300].replace('\n', ' ')
+                    print(f"   Content preview: {preview}...")
+                    print()
+                    break
+
+    def _save_original_request(self, body: dict) -> None:
         """Сохраняет исходный запрос в файл requests/original_request_<timestamp>.json"""
         try:
             os.makedirs('requests', exist_ok=True)
@@ -815,9 +795,6 @@ class RequestProcessor:
             
             data = {
                 "timestamp": datetime.now().isoformat(),
-                "method": method,
-                "url": url,
-                "headers": headers,
                 "body": body
             }
             
@@ -826,7 +803,7 @@ class RequestProcessor:
         except Exception as e:
             print(f"[-] Ошибка при сохранении исходного запроса: {e}")
 
-    def _save_modified_request(self, modified_body: dict, modifications: List[str], method: str, url: str, headers: dict) -> None:
+    def _save_modified_request(self, modified_body: dict, modifications: List[str]) -> None:
         """Сохраняет модифицированный запрос в файл requests/modified_request_<timestamp>.json"""
         try:
             os.makedirs('requests', exist_ok=True)
@@ -835,9 +812,6 @@ class RequestProcessor:
             
             data = {
                 "timestamp": datetime.now().isoformat(),
-                "method": method,
-                "url": url,
-                "headers": headers,
                 "body": modified_body,
                 "modifications": modifications
             }

@@ -55,3 +55,6 @@ htmlcov/
 
 # OS files
 Thumbs.db
+
+# Roo Code tools secrets
+.roo/tools/.env

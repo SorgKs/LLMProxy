@@ -46,25 +46,6 @@ def log_debug(message: str, **kwargs):
     _write_log(entry)
 
 
-def log_request(method: str, url: str, headers: dict):
-    """
-    Логирует входящий запрос (без тела).
-    
-    Args:
-        method: HTTP метод
-        url: URL запроса
-        headers: Заголовки запроса
-    """
-    # Маскируем чувствительные заголовки
-    safe_headers = headers.copy()
-    if "authorization" in safe_headers:
-        safe_headers["authorization"] = "***"
-    if "api-key" in safe_headers:
-        safe_headers["api-key"] = "***"
-    
-    log_info("Request received", type="request", method=method, url=url, headers=safe_headers)
-
-
 def log_modified_request(method: str, url: str, headers: dict,
                          modifications: List[str] = None):
     """
