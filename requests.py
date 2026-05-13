@@ -670,7 +670,10 @@ class RequestProcessor:
     
         # Сохраняем исходный запрос в requests/
         self._save_original_request(body)
-        
+
+        if "messages" in body:
+            self._detect_failed_apply_diff(body["messages"])
+
         # Делаем глубокую копию, чтобы не изменять оригинал
         modified_body = copy.deepcopy(body)
         modifications = []
@@ -786,6 +789,47 @@ class RequestProcessor:
                     print()
                     break
 
+    def _cleanup_requests_folder(self) -> None:
+        """Очищает папку requests: хранит только за последние 24 часа, но не более 30 файлов."""
+        try:
+            requests_dir = 'requests'
+            if not os.path.exists(requests_dir):
+                return
+            
+            # Получаем все json файлы
+            files = []
+            for filename in os.listdir(requests_dir):
+                if filename.endswith('.json'):
+                    filepath = os.path.join(requests_dir, filename)
+                    stat = os.stat(filepath)
+                    files.append({
+                        'path': filepath,
+                        'mtime': stat.st_mtime
+                    })
+            
+            if not files:
+                return
+            
+            # Сортируем по времени (новейшие первые)
+            files.sort(key=lambda x: x['mtime'], reverse=True)
+            
+            now = datetime.now()
+            cutoff_24h = now.timestamp() - 24 * 60 * 60
+            
+            # Файлы для удаления: старше 24 часов или превышают лимит 30 файлов
+            files_to_delete = []
+            for i, f in enumerate(files):
+                if f['mtime'] < cutoff_24h:
+                    files_to_delete.append(f['path'])
+                elif i >= 30:
+                    files_to_delete.append(f['path'])
+            
+            for filepath in files_to_delete:
+                os.remove(filepath)
+                
+        except Exception as e:
+            print(f"[-] Ошибка при очистке папки requests: {e}")
+
     def _save_original_request(self, body: dict) -> None:
         """Сохраняет исходный запрос в файл requests/original_request_<timestamp>.json"""
         try:
@@ -800,6 +844,9 @@ class RequestProcessor:
             
             with open(filename, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            
+            # Очищаем старые файлы после сохранения
+            self._cleanup_requests_folder()
         except Exception as e:
             print(f"[-] Ошибка при сохранении исходного запроса: {e}")
 
@@ -818,6 +865,9 @@ class RequestProcessor:
             
             with open(filename, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            
+            # Очищаем старые файлы после сохранения
+            self._cleanup_requests_folder()
         except Exception as e:
             print(f"[-] Ошибка при сохранении модифицированного запроса: {e}")
     

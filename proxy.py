@@ -543,7 +543,6 @@ def check_function_sufficiency(data: dict, function_name: str) -> Optional[str]:
         #print(line_content)
         #print(line_indent)
         if line_indent <= base_indent:
-            print(f"[DEBUG proxy] Функция полная (конец на строке {i})")
             #print(function_body)
             return {
                 "type": "function_content",
@@ -554,8 +553,6 @@ def check_function_sufficiency(data: dict, function_name: str) -> Optional[str]:
         
         function_body[i] = line_content
         i += 1
-    
-    print(f"[DEBUG proxy] Функция обрезана (достигнут конец файла)")
     return {
         "type": "function_content",
         "path": data["path"],
@@ -811,7 +808,6 @@ async def proxy_chat_completions(request: Request):
     # Цикл self-correction (отправка НОВЫХ запросов при невалидных tool calls)
     while correction_attempt <= max_corrections:
         pending_data = None
-        print(f"[DEBUG proxy] _process_request_pending = {_process_request_pending}")
         if _process_request_pending:
             pending_data = _extract_data_from_request(_process_request_pending,current_body)
             if pending_data is None:
@@ -924,8 +920,6 @@ async def proxy_chat_completions(request: Request):
             print(f"{datetime.now().isoformat()} | ANS | size={len(str(answer.full_response))} | status={answer.status_code} | {tools_list} | duration={answer.duration:.2f}s")
         
         # ✅ ОБРАБОТКА ОТВЕТА (исправление форматирования и т.д.)
-        # [DEBUG] Показываем, что передаём в answer_processor.process()
-        print(f"[DEBUG proxy] calling answer_processor.process(answer)")
         process_result = answer_processor.process(answer, data=pending_data)
 
         # Обработка действия от процессора

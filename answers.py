@@ -950,6 +950,13 @@ class AnswerProcessor:
                 if self.fix_apply_diff(parsed_args):
                     changed = True
                     changes.append("apply_diff: конвертирован в формат RooCode")
+                
+                # Проверяем и исправляем start_line если есть данные файла
+                if data:
+                    fixed, fix_changes = self._validate_and_fix_apply_diff(parsed_args, data)
+                    if fixed:
+                        changed = True
+                        changes.extend(fix_changes)
             
             if tool_name == "ask_followup_question":
                 if self._fix_followup_question(parsed_args):
@@ -1049,7 +1056,6 @@ class AnswerProcessor:
         
         # 3. Обрабатываем каждый tool call отдельно (модифицируем tc на месте)
         if answer.tool_calls:
-            print(f"[DEBUG process] Step 2: processing tool calls")
             for i, tc in enumerate(answer.tool_calls):
                 if tc['id'] not in self.progress:
                     self.progress[tc['id']] = "current"
@@ -1090,20 +1096,26 @@ class AnswerProcessor:
                         func_path = tc_copy['function']['arguments']['path']
                         func_name = tc_copy['function']['arguments']['function']
                         if data and data.get("type") == "function_content" and data.get("path") == func_path:
-                            print(f"[DEBUG process] Step 3: Use function '{func_name}()' content")
                             changed, changes = self.process_single_tool_call(tc_copy, i, data)
                             self.progress[tc['id']] = "completed"
                         else:
-                            print(f"[DEBUG process] Step 3: Requesting function '{func_name}()' content from proxy.py")
                             return {
                                 'action': 'request_function',
                                 'path': func_path,
                                 'function_name': func_name
                             }
+                    elif (tool_name == "apply_diff"):
+                        diff_path = tc_copy['function']['arguments']['path']
+                        if data and data.get("type") == "file_content" and data.get("path") == diff_path:
+                            changed, changes = self.process_single_tool_call(tc_copy, i, data)
+                            self.progress[tc['id']] = "completed"
+                        else:
+                            return {
+                                'action': 'request_file',
+                                'path': diff_path
+                            }
                     else:
-                        print(f"[DEBUG process] Step 2: processing tool_call[{i}] = {tool_name}")
                         changed, changes = self.process_single_tool_call(tc_copy, i)
-                        print(f"   - tool name in tc_copy: {tc_copy['function']['name']}")
                         self.progress[tc['id']] = "completed"
                 
                     # Сериализуем аргументы обратно в строку и обновляем tool_calls
@@ -1789,6 +1801,83 @@ class AnswerProcessor:
                 result.append('')
         
         return '\n'.join(result)
+
+def _extract_search_content(self, diff: str) -> Optional[str]:
+    """
+    Извлекает содержимое SEARCH блока из diff.
+    
+    Args:
+        diff: Строка diff для анализа
+        
+    Returns:
+        Содержимое SEARCH блока или None если не найден
+    """
+    if not diff:
+        return None
+        
+    lines = diff.split('\n')
+    in_search = False
+    search_lines = []
+    
+    for line in lines:
+        if line.strip() == "<<<<<<< SEARCH":
+            in_search = True
+            continue
+        if line.strip() == "=======" and in_search:
+            break
+        if in_search:
+            search_lines.append(line)
+            
+    if search_lines:
+        # Удаляем пустые строки в начале и конце
+        while search_lines and not search_lines[0].strip():
+            search_lines.pop(0)
+        while search_lines and not search_lines[-1].strip():
+            search_lines.pop()
+            
+        return '\n'.join(search_lines)
+    return None
+
+    def _find_search_block_line(self, file_content: Dict[int, str], search_block: str) -> Optional[int]:
+        """
+        Находит номер строки, где начинается SEARCH блок в файле.
+        
+        Args:
+            file_content: Словарь {номер_строки: содержимое}
+            search_block: Содержимое SEARCH блока для поиска
+            
+        Returns:
+            Номер строки или None если не найден
+        """
+        if not file_content or not search_block:
+            return None
+            
+        search_lines = search_block.split('\n')
+        if not search_lines:
+            return None
+            
+        # Собираем все строки файла в список
+        line_nums = sorted(file_content.keys())
+        file_lines = [file_content[k] for k in line_nums]
+        
+        # Ищем совпадение, игнорируя отступы в начале
+        for i in range(len(file_lines) - len(search_lines) + 1):
+            match = True
+            for j, search_line in enumerate(search_lines):
+                if i + j >= len(file_lines):
+                    match = False
+                    break
+                # Сравниваем, игнорируя различия в пробелах в начале
+                file_line = file_lines[i + j].lstrip()
+                search_line_stripped = search_line.lstrip()
+                if file_line != search_line_stripped:
+                    match = False
+                    break
+            if match:
+                # Возвращаем номер строки (1-based)
+                return line_nums[i]
+                
+        return None
 
     def _send_parse_error_to_llm(self, answer, error: ArgumentParseError, tool_call_id: str) -> Dict:
         """
