@@ -2,6 +2,7 @@
 """
 Комбинированные тесты: extract + check_file_sufficiency/check_function_sufficiency на основе JSON-кейсов из assets.
 """
+import log
 import os
 import sys
 import json

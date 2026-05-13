@@ -3,6 +3,7 @@
 Тест динамической загрузки инструментов из папки tools/
 """
 import os
+import log
 import tempfile
 import yaml
 import json
@@ -81,7 +82,7 @@ def test_tools_from_folder_added_to_request():
         assert added_tool['function']['name'] == 'test_folder_tool'
         assert added_tool['function']['description'] == 'A test tool from tools/ folder'
         
-        print('✅ test_tools_from_folder_added_to_request passed!')
+        log.log_info('test_tools_from_folder_added_to_request passed!')
 
 
 def test_tools_from_folder_not_added_when_disabled():
@@ -138,7 +139,7 @@ def test_tools_from_folder_not_added_when_disabled():
             assert 'disabled_tool' not in tool_names, \
                 f"'disabled_tool' не должен присутствовать в {tool_names}"
         
-        print('✅ test_tools_from_folder_not_added_when_disabled passed!')
+        log.log_info('test_tools_from_folder_not_added_when_disabled passed!')
 
 
 def test_multiple_tools_from_folder():
@@ -218,7 +219,7 @@ def test_multiple_tools_from_folder():
         assert len([t for t in result['tools'] 
                    if t.get('function', {}).get('name') in ['tool_a', 'tool_b', 'tool_c']]) == 3
         
-        print('✅ test_multiple_tools_from_folder passed!')
+        log.log_info('test_multiple_tools_from_folder passed!')
 
 
 def test_tool_already_in_request_not_duplicated():
@@ -282,7 +283,7 @@ def test_tool_already_in_request_not_duplicated():
         assert len(function_replace_tools) == 1, \
             f"Ожидался 1 function_replace, получено {len(function_replace_tools)}"
         
-        print('✅ test_tool_already_in_request_not_duplicated passed!')
+        log.log_info('test_tool_already_in_request_not_duplicated passed!')
 
 
 if __name__ == '__main__':
@@ -290,4 +291,4 @@ if __name__ == '__main__':
     test_tools_from_folder_not_added_when_disabled()
     test_multiple_tools_from_folder()
     test_tool_already_in_request_not_duplicated()
-    print('\n🎉 Все тесты пройдены!')
+    log.log_info('Все тесты пройдены!')

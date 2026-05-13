@@ -362,6 +362,7 @@ def _extract_file_content_from_request(
             #print(parts)
             if len(parts) != 2:
                 logger.info(f"[DEBUG _extract_file_content_from_request] Разбиение по | не сработало")
+                logger.info(f"[DEBUG _extract_file_content_from_request] Line ='{line}'")
             
             # Левая часть - номер строки
             try:

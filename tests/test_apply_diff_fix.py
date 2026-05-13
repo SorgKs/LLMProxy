@@ -1,4 +1,5 @@
 # tests/test_apply_diff_fix.py
+import log
 import json
 import os
 import sys

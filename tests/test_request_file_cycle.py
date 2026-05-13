@@ -16,6 +16,7 @@ import asyncio
 import unittest
 from unittest.mock import patch
 
+import log
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import httpx
@@ -133,9 +134,9 @@ class TestRequestFileCycle(unittest.TestCase):
                     loop.run_until_complete(self._test_case(case))
                 finally:
                     loop.close()
-                print(f"  ✅ case '{name}' passed")
+                log.log_info(f"case {name} passed")
 
-        print(f"\n✅ Проверено {len(self.test_cases)} интеграционных кейсов request_file cycle")
+        log.log_info(f"Проверено {len(self.test_cases)} интеграционных кейсов request_file cycle")
 
     def test_extract_file_content_from_request_in_proxy(self):
         """Тестирует _extract_file_content_from_request напрямую через proxy."""
@@ -274,7 +275,7 @@ class TestRequestFileCycle(unittest.TestCase):
             read_file_args = json.loads(tool_calls[0]["function"]["arguments"])
             self.assertEqual(read_file_args["path"], "calc.py")
 
-            print("  ✅ Step 1: function_replace → read_file passed")
+            log.log_info("Step 1: function_replace → read_file passed")
 
             # Шаг 2: Клиент присылает read_file response с данными файла
             apply_diff_action = {
@@ -366,7 +367,7 @@ class TestRequestFileCycle(unittest.TestCase):
             self.assertEqual(len(tool_calls2), 1)
             self.assertEqual(tool_calls2[0]["function"]["name"], "apply_diff")
 
-            print("  ✅ Step 2: read_file response → apply_diff passed")
+            log.log_info("Step 2: read_file response → apply_diff passed")
 
     def test_full_cycle_with_mocked_process_and_llm(self):
         """

@@ -13,6 +13,7 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import log
 from requests import RequestProcessor
 
 
@@ -26,7 +27,7 @@ class TestRequestProcessorInit(unittest.TestCase):
         self.assertEqual(processor.config_path, "config/tools.yaml")
         self.assertIsInstance(processor.tools_config, dict)
         self.assertIsInstance(processor.changes_log, list)
-        print("✅ test_default_init passed!")
+        log.log_info("test_default_init passed!")
 
     def test_custom_config_path(self):
         """Проверяет инициализацию с кастомным путем к конфигу"""
@@ -37,7 +38,7 @@ class TestRequestProcessorInit(unittest.TestCase):
         try:
             processor = RequestProcessor(config_path=config_path)
             self.assertEqual(processor.config_path, config_path)
-            print("✅ test_custom_config_path passed!")
+            log.log_info("test_custom_config_path passed!")
         finally:
             if os.path.exists(config_path):
                 os.unlink(config_path)
@@ -61,7 +62,7 @@ class TestMessageProcessing(unittest.TestCase):
             result = self.processor._remove_markers(input_text)
             self.assertEqual(result, expected, f"Failed for: {input_text}")
 
-        print("✅ test_remove_markers_from_text passed!")
+        log.log_info("test_remove_markers_from_text passed!")
 
     def test_remove_system_prompt_noise(self):
         """Проверяет удаление шума из системного промпта"""
@@ -69,7 +70,7 @@ class TestMessageProcessing(unittest.TestCase):
         expected = "Test \n\n noise"
         self.assertEqual(result, expected)
 
-        print("✅ test_remove_system_prompt_noise passed!")
+        log.log_info("test_remove_system_prompt_noise passed!")
 
     def test_optimize_system_prompt(self):
         """Проверяет оптимизацию системного промпта"""
@@ -77,7 +78,7 @@ class TestMessageProcessing(unittest.TestCase):
         result = self.processor._optimize_system_prompt(input_text)
         self.assertEqual(result, input_text)
 
-        print("✅ test_optimize_system_prompt passed!")
+        log.log_info("test_optimize_system_prompt passed!")
 
     def test_process_messages_with_system_prompt(self):
         """Проверяет обработку сообщений с системным промптом"""
@@ -93,7 +94,7 @@ class TestMessageProcessing(unittest.TestCase):
         self.assertIsInstance(new_total, int)
         self.assertEqual(messages[0]["content"], "You are a helper \n\n noise")
 
-        print("✅ test_process_messages_with_system_prompt passed!")
+        log.log_info("test_process_messages_with_system_prompt passed!")
 
     def test_process_messages_no_system_prompt(self):
         """Проверяет обработку сообщений без системного промпта"""
@@ -107,7 +108,7 @@ class TestMessageProcessing(unittest.TestCase):
         self.assertFalse(changed)
         self.assertEqual(messages[0]["content"], "Hello")
 
-        print("✅ test_process_messages_no_system_prompt passed!")
+        log.log_info("test_process_messages_no_system_prompt passed!")
 
 
 class TestToolProcessing(unittest.TestCase):
@@ -137,7 +138,7 @@ class TestToolProcessing(unittest.TestCase):
             "Very long description that should be optimized or removed"
         )
 
-        print("✅ test_process_tools_removes_descriptions passed!")
+        log.log_info("test_process_tools_removes_descriptions passed!")
 
     def test_process_tools_read_file_optimization(self):
         """Проверяет специфическую оптимизацию для read_file"""
@@ -158,7 +159,7 @@ class TestToolProcessing(unittest.TestCase):
         expected_desc = "Read a file from the local filesystem. returns up to 2000 lines per file"
         self.assertEqual(filtered_tools[0]["function"]["description"], expected_desc)
 
-        print("✅ test_process_tools_read_file_optimization passed!")
+        log.log_info("test_process_tools_read_file_optimization passed!")
 
     def test_process_tools_empty_list(self):
         """Проверяет обработку пустого списка инструментов"""
@@ -166,14 +167,14 @@ class TestToolProcessing(unittest.TestCase):
         self.assertFalse(changed)
         self.assertEqual(filtered_tools, [])
 
-        print("✅ test_process_tools_empty_list passed!")
+        log.log_info("test_process_tools_empty_list passed!")
 
     def test_process_tools_none(self):
         """Проверяет обработку None вместо списка инструментов"""
         with self.assertRaises(TypeError):
             self.processor._process_tools(None)
 
-        print("✅ test_process_tools_none passed!")
+        log.log_info("test_process_tools_none passed!")
 
 
 class TestProjectStructure(unittest.TestCase):
@@ -189,7 +190,7 @@ class TestProjectStructure(unittest.TestCase):
             self.assertIsInstance(structure, str)
             self.assertGreater(len(structure), 0)
 
-        print("✅ test_get_project_structure passed!")
+        log.log_info("test_get_project_structure passed!")
 
     def test_add_project_structure_to_request(self):
         """Проверяет добавление структуры проекта в запрос"""
@@ -204,7 +205,7 @@ class TestProjectStructure(unittest.TestCase):
 
         self.assertIsInstance(result, bool)
 
-        print("✅ test_add_project_structure_to_request passed!")
+        log.log_info("test_add_project_structure_to_request passed!")
 
 
 class TestFullProcess(unittest.TestCase):
@@ -230,7 +231,7 @@ class TestFullProcess(unittest.TestCase):
         self.assertEqual(len(result["messages"]), 2)
         self.assertEqual(result["messages"][0]["content"], "You are a helper \n\n noise")
 
-        print("✅ test_process_request_with_messages passed!")
+        log.log_info("test_process_request_with_messages passed!")
 
     def test_process_request_with_tools(self):
         """Проверяет полную обработку запроса с инструментами"""
@@ -267,7 +268,7 @@ class TestFullProcess(unittest.TestCase):
             self.assertIn("tools", result)
             self.assertTrue(len(result["tools"]) > 0)
 
-            print("✅ test_process_request_with_tools passed!")
+            log.log_info("test_process_request_with_tools passed!")
         finally:
             if os.path.exists(config_path):
                 os.unlink(config_path)
@@ -285,7 +286,7 @@ class TestFullProcess(unittest.TestCase):
 
         self.assertEqual(result["messages"][0]["content"], "Simple message")
 
-        print("✅ test_process_request_no_modifications passed!")
+        log.log_info("test_process_request_no_modifications passed!")
 
 
 class TestReset(unittest.TestCase):
@@ -303,7 +304,7 @@ class TestReset(unittest.TestCase):
 
         self.assertEqual(len(processor.changes_log), 0)
 
-        print("✅ test_reset_clears_changes_log passed!")
+        log.log_info("test_reset_clears_changes_log passed!")
 
 
 if __name__ == "__main__":

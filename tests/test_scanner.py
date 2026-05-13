@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import log
 """
 Тесты для ProjectStructureScanner (scanner.py)
 Проверяет сканирование Python-проектов и построение дерева структуры
@@ -83,7 +84,7 @@ class SubClass:
         result = self.scanner.scan(self.temp_dir)
         self.assertIsInstance(result, str)
         self.assertGreater(len(result), 0)
-        print("✅ test_scan_returns_string passed!")
+        log.log_info("test_scan_returns_string passed!")
 
     def test_scan_includes_filenames(self):
         """Проверяет, что в результате есть имена файлов"""
@@ -91,21 +92,21 @@ class SubClass:
         self.assertIn("main.py", result)
         self.assertIn("utils.py", result)
         self.assertIn("module.py", result)
-        print("✅ test_scan_includes_filenames passed!")
+        log.log_info("test_scan_includes_filenames passed!")
 
     def test_scan_includes_class_names(self):
         """Проверяет, что в результате есть имена классов"""
         result = self.scanner.scan(self.temp_dir)
         self.assertIn("MainClass", result)
         self.assertIn("SubClass", result)
-        print("✅ test_scan_includes_class_names passed!")
+        log.log_info("test_scan_includes_class_names passed!")
 
     def test_scan_includes_method_names(self):
         """Проверяет, что в результате есть имена публичных методов"""
         result = self.scanner.scan(self.temp_dir)
         self.assertIn("public_method", result)
         self.assertIn("method", result)
-        print("✅ test_scan_includes_method_names passed!")
+        log.log_info("test_scan_includes_method_names passed!")
 
     def test_scan_excludes_private_methods(self):
         """Проверяет, что приватные методы (с _) исключаются"""
@@ -116,14 +117,14 @@ class SubClass:
         for line in lines:
             if "_private_method" in line:
                 self.fail("_private_method не должен быть в результате сканирования")
-        print("✅ test_scan_excludes_private_methods passed!")
+        log.log_info("test_scan_excludes_private_methods passed!")
 
     def test_scan_includes_functions(self):
         """Проверяет, что standalone-функции включены"""
         result = self.scanner.scan(self.temp_dir)
         self.assertIn("standalone_function", result)
         self.assertIn("helper_func", result)
-        print("✅ test_scan_includes_functions passed!")
+        log.log_info("test_scan_includes_functions passed!")
 
     def test_scan_includes_function_signatures(self):
         """Проверяет, что сигнатуры функций включены"""
@@ -131,7 +132,7 @@ class SubClass:
         # standalone_function должна иметь сигнатуру с типами
         self.assertIn("int", result)
         self.assertIn("str", result)
-        print("✅ test_scan_includes_function_signatures passed!")
+        log.log_info("test_scan_includes_function_signatures passed!")
 
     def test_scan_ignores_non_python_files(self):
         """Проверяет, что не-Python файлы игнорируются"""
@@ -139,7 +140,7 @@ class SubClass:
         # not_python.txt не должен быть в дереве как Python-файл
         # (может упоминаться в другом контексте, но не как .py)
         self.assertNotIn("not_python.txt", result)
-        print("✅ test_scan_ignores_non_python_files passed!")
+        log.log_info("test_scan_ignores_non_python_files passed!")
 
     def test_scan_with_project_structure_marker(self):
         """Проверяет наличие маркера структуры проекта"""
@@ -147,21 +148,21 @@ class SubClass:
         # Проверяем, что структура содержит имена файлов
         self.assertIn("main.py", result)
         self.assertIn("utils.py", result)
-        print("✅ test_scan_with_project_structure_marker passed!")
+        log.log_info("test_scan_with_project_structure_marker passed!")
 
     def test_scan_subdirectory_included(self):
         """Проверяет, что поддиректории сканируются"""
         result = self.scanner.scan(self.temp_dir)
         self.assertIn("subdir", result)
         self.assertIn("module.py", result)
-        print("✅ test_scan_subdirectory_included passed!")
+        log.log_info("test_scan_subdirectory_included passed!")
 
     def test_scan_nonexistent_path(self):
         """Проверяет обработку несуществующего пути"""
         # Должен выбросить ValueError
         with self.assertRaises(ValueError):
             self.scanner.scan("/nonexistent/path")
-        print("✅ test_scan_nonexistent_path passed!")
+        log.log_info("test_scan_nonexistent_path passed!")
 
     def test_extract_symbols_classes(self):
         """Проверяет извлечение символов из файла с классами"""
@@ -171,7 +172,7 @@ class SubClass:
         # Должен найти MainClass
         class_names = [s[1] for s in symbols if s[0] == "class"]
         self.assertIn("MainClass", class_names)
-        print("✅ test_extract_symbols_classes passed!")
+        log.log_info("test_extract_symbols_classes passed!")
 
     def test_extract_symbols_functions(self):
         """Проверяет извлечение символов из файла с функциями"""
@@ -183,7 +184,7 @@ class SubClass:
         func_signatures = [s[1] for s in symbols if s[0] == "def"]
         self.assertTrue(any("helper_func" in sig for sig in func_signatures))
         self.assertTrue(any("async_function" in sig for sig in func_signatures))
-        print("✅ test_extract_symbols_functions passed!")
+        log.log_info("test_extract_symbols_functions passed!")
 
     def test_get_function_signature(self):
         """Проверяет получение сигнатуры функции"""
@@ -196,7 +197,7 @@ class SubClass:
         signature = self.scanner._get_function_signature(func_def)
         self.assertIn("x", signature)
         self.assertIn("y", signature)
-        print("✅ test_get_function_signature passed!")
+        log.log_info("test_get_function_signature passed!")
 
     def test_decorator_extraction(self):
         """Проверяет извлечение декораторов"""
@@ -213,7 +214,7 @@ def static_method():
         # Проверяем, что декоратор статического метода отображается
         signature = self.scanner._get_function_signature(func_def)
         self.assertIn("staticmethod", signature)
-        print("✅ test_decorator_extraction passed!")
+        log.log_info("test_decorator_extraction passed!")
 
 
 class TestScannerIgnoreDirs(unittest.TestCase):
@@ -241,7 +242,7 @@ class TestScannerIgnoreDirs(unittest.TestCase):
             self.assertNotIn("__pycache__", result)
             self.assertIn("real.py", result)
 
-            print("✅ test_ignore_pycache passed!")
+            log.log_info("test_ignore_pycache passed!")
         finally:
             import shutil
             shutil.rmtree(temp_dir, ignore_errors=True)

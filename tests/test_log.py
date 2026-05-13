@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import log
 """
 Тесты для log.py (логирование)
 Проверяет функции структурированного логирования в JSON
@@ -38,7 +39,7 @@ class TestLogInfo(unittest.TestCase):
             self.assertEqual(data["key"], "value")
             self.assertEqual(data["level"], "INFO")
 
-        print("✅ test_log_info_outputs_json passed!")
+        log.log_info("test_log_info_outputs_json passed!")
 
     def test_log_info_with_timestamp(self):
         """Проверяет наличие временной метки"""
@@ -49,7 +50,7 @@ class TestLogInfo(unittest.TestCase):
 
             self.assertIn("timestamp", data)
 
-        print("✅ test_log_info_with_timestamp passed!")
+        log.log_info("test_log_info_with_timestamp passed!")
 
 
 class TestLogDebug(unittest.TestCase):
@@ -66,7 +67,7 @@ class TestLogDebug(unittest.TestCase):
             self.assertEqual(data["level"], "DEBUG")
             self.assertEqual(data["data"], "test")
 
-        print("✅ test_log_debug_outputs_json passed!")
+        log.log_info("test_log_debug_outputs_json passed!")
 
 
 class TestLogRequest(unittest.TestCase):
@@ -84,7 +85,7 @@ class TestLogRequest(unittest.TestCase):
             self.assertEqual(data["url"], "http://test.com")
             self.assertIn("headers", data)
 
-        print("✅ test_log_request_structure passed!")
+        log.log_info("test_log_request_structure passed!")
 
     def test_log_request_masks_headers(self):
         """Проверяет маскировку заголовков авторизации"""
@@ -100,7 +101,7 @@ class TestLogRequest(unittest.TestCase):
             auth_header = data["headers"].get("authorization", "")
             self.assertEqual(auth_header, "***")
 
-        print("✅ test_log_request_masks_headers passed!")
+        log.log_info("test_log_request_masks_headers passed!")
 
 
 class TestLogModifiedRequest(unittest.TestCase):
@@ -122,7 +123,7 @@ class TestLogModifiedRequest(unittest.TestCase):
             self.assertIn("modifications", data)
             self.assertEqual(len(data["modifications"]), 2)
 
-        print("✅ test_log_modified_request_structure passed!")
+        log.log_info("test_log_modified_request_structure passed!")
 
 
 class TestLogResponse(unittest.TestCase):
@@ -139,7 +140,7 @@ class TestLogResponse(unittest.TestCase):
             self.assertEqual(data["duration"], 1.5)
             self.assertEqual(data["status_code"], 200)
 
-        print("✅ test_log_response_structure passed!")
+        log.log_info("test_log_response_structure passed!")
 
     def test_log_response_default_status(self):
         """Проверяет значение status_code по умолчанию"""
@@ -151,7 +152,7 @@ class TestLogResponse(unittest.TestCase):
             # По умолчанию должно быть 200
             self.assertEqual(data["status_code"], 200)
 
-        print("✅ test_log_response_default_status passed!")
+        log.log_info("test_log_response_default_status passed!")
 
 
 class TestLogRetryAttempt(unittest.TestCase):
@@ -177,7 +178,7 @@ class TestLogRetryAttempt(unittest.TestCase):
             self.assertIn("errors", data)
             self.assertIn("retry_message", data)
 
-        print("✅ test_log_retry_attempt_structure passed!")
+        log.log_info("test_log_retry_attempt_structure passed!")
 
 
 class TestLogStats(unittest.TestCase):
@@ -201,7 +202,7 @@ class TestLogStats(unittest.TestCase):
             self.assertEqual(data["duration"], 3.5)
             self.assertEqual(data["status_code"], 200)
 
-        print("✅ test_log_stats_structure passed!")
+        log.log_info("test_log_stats_structure passed!")
 
 
 class TestWriteLog(unittest.TestCase):
@@ -231,7 +232,7 @@ class TestWriteLog(unittest.TestCase):
             if os.path.exists(log_file):
                 os.unlink(log_file)
 
-        print("✅ test_write_log_to_file passed!")
+        log.log_info("test_write_log_to_file passed!")
 
     def test_write_log_handles_exception(self):
         """Проверяет обработку исключений при записи"""
@@ -243,7 +244,7 @@ class TestWriteLog(unittest.TestCase):
             except Exception:
                 self.fail("_write_log должен обрабатывать исключения внутри")
 
-        print("✅ test_write_log_handles_exception passed!")
+        log.log_info("test_write_log_handles_exception passed!")
 
 
 class TestLogIntegration(unittest.TestCase):
@@ -259,7 +260,7 @@ class TestLogIntegration(unittest.TestCase):
             # Должно быть 3 вызова _write_log
             self.assertEqual(mock_write_log.call_count, 3)
 
-        print("✅ test_multiple_log_calls passed!")
+        log.log_info("test_multiple_log_calls passed!")
 
     def test_log_with_special_characters(self):
         """Проверяет логирование со специальными символами"""
@@ -271,7 +272,7 @@ class TestLogIntegration(unittest.TestCase):
 
             self.assertEqual(data["message"], special_message)
 
-        print("✅ test_log_with_special_characters passed!")
+        log.log_info("test_log_with_special_characters passed!")
 
 
 if __name__ == "__main__":

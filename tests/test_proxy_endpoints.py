@@ -12,6 +12,8 @@ import asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import log
+
 
 class TestAnswerDataclass(unittest.TestCase):
     """Тесты для дата-класса Answer"""
@@ -33,7 +35,7 @@ class TestAnswerDataclass(unittest.TestCase):
         self.assertFalse(answer.is_stream)
         self.assertEqual(answer.status_code, 200)
 
-        print("✅ test_answer_creation passed!")
+        log.log_info("test_answer_creation passed!")
 
     def test_answer_content_property(self):
         """Проверяет setter для content"""
@@ -48,7 +50,7 @@ class TestAnswerDataclass(unittest.TestCase):
         answer.content = "Test content"
         self.assertEqual(answer.content, "Test content")
 
-        print("✅ test_answer_content_property passed!")
+        log.log_info("test_answer_content_property passed!")
 
     def test_answer_tool_calls_property(self):
         """Проверяет setter для tool_calls"""
@@ -64,7 +66,7 @@ class TestAnswerDataclass(unittest.TestCase):
         answer.tool_calls = calls
         self.assertEqual(answer.tool_calls, calls)
 
-        print("✅ test_answer_tool_calls_property passed!")
+        log.log_info("test_answer_tool_calls_property passed!")
 
 
 class TestExtractFileContentFromRequest(unittest.TestCase):
@@ -95,7 +97,7 @@ class TestExtractFileContentFromRequest(unittest.TestCase):
         self.assertEqual(result["type"], "file_content")
         self.assertEqual(result["path"], "test.py")
 
-        print("✅ test_extract_with_read_file passed!")
+        log.log_info("test_extract_with_read_file passed!")
 
     def test_extract_no_tool_calls(self):
         """Проверяет извлечение при отсутствии tool_calls"""
@@ -106,7 +108,7 @@ class TestExtractFileContentFromRequest(unittest.TestCase):
         result = _extract_file_content_from_request(body)
         self.assertIsNone(result)
 
-        print("✅ test_extract_no_tool_calls passed!")
+        log.log_info("test_extract_no_tool_calls passed!")
 
 
 class TestCheckFileSufficiency(unittest.TestCase):
@@ -131,7 +133,7 @@ class TestCheckFileSufficiency(unittest.TestCase):
         result = check_file_sufficiency(data, pending_info)
         self.assertTrue(result)
 
-        print("✅ test_sufficient_data passed!")
+        log.log_info("test_sufficient_data passed!")
 
     def test_insufficient_data_no_eof(self):
         """Проверяет недостаточные данные (нет EOF)"""
@@ -151,7 +153,7 @@ class TestCheckFileSufficiency(unittest.TestCase):
         result = check_file_sufficiency(data, pending_info)
         self.assertFalse(result)
 
-        print("✅ test_insufficient_data_no_eof passed!")
+        log.log_info("test_insufficient_data_no_eof passed!")
 
 
 class TestSaveResponse(unittest.TestCase):
@@ -171,7 +173,7 @@ class TestSaveResponse(unittest.TestCase):
             with patch("os.makedirs"):
                 save_responce(False, test_response)
 
-        print("✅ test_save_response_creates_file passed!")
+        log.log_info("test_save_response_creates_file passed!")
 
     def test_save_modified_response(self):
         """Проверяет сохранение модифицированного ответа"""
@@ -186,7 +188,7 @@ class TestSaveResponse(unittest.TestCase):
             with patch("os.makedirs"):
                 save_responce(True, test_response)
 
-        print("✅ test_save_modified_response passed!")
+        log.log_info("test_save_modified_response passed!")
 
 
 class TestCreateErrorResponse(unittest.TestCase):
@@ -214,7 +216,7 @@ class TestCreateErrorResponse(unittest.TestCase):
         self.assertEqual(response_body["error"]["type"], "api_error")
         self.assertEqual(response_body["error"]["code"], 400)
 
-        print("✅ test_create_error_response_structure passed!")
+        log.log_info("test_create_error_response_structure passed!")
 
     def test_create_error_response_defaults(self):
         """Проверяет значения по умолчанию"""
@@ -232,7 +234,7 @@ class TestCreateErrorResponse(unittest.TestCase):
 
         self.assertEqual(response.status_code, 500)
 
-        print("✅ test_create_error_response_defaults passed!")
+        log.log_info("test_create_error_response_defaults passed!")
 
 
 class TestSendToLLMWithRetry(unittest.TestCase):
@@ -265,7 +267,7 @@ class TestSendToLLMWithRetry(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result["status_code"], 200)
 
-        print("✅ test_send_to_llm_returns_response passed!")
+        log.log_info("test_send_to_llm_returns_response passed!")
 
 
 class TestProxyInitialization(unittest.TestCase):
@@ -280,7 +282,7 @@ class TestProxyInitialization(unittest.TestCase):
         self.assertIsNotNone(app)
         self.assertTrue(hasattr(app, "routes"))
 
-        print("✅ test_proxy_has_app passed!")
+        log.log_info("test_proxy_has_app passed!")
 
     def test_proxy_routes_exist(self):
         """Проверяет наличие основных роутов"""
@@ -295,7 +297,7 @@ class TestProxyInitialization(unittest.TestCase):
             or any("/models" in route for route in routes)
         )
 
-        print("✅ test_proxy_routes_exist passed!")
+        log.log_info("test_proxy_routes_exist passed!")
 
 
 if __name__ == "__main__":

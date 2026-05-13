@@ -7,6 +7,7 @@ from unittest.mock import Mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import log
 from answers import AnswerProcessor
 
 
@@ -81,7 +82,7 @@ class TestRealLLMResponse(unittest.TestCase):
         parsed = json.loads(args_str)
         self.assertEqual(parsed['path'], "requests.py")
 
-        print("✅ test_real_response_3e3b passed!")
+        log.log_info("test_real_response_3e3b passed!")
 
     def test_real_response_3e3b_arguments_structure(self):
         """Проверяет конкретную структуру arguments после process()"""
@@ -115,7 +116,7 @@ class TestRealLLMResponse(unittest.TestCase):
         self.assertIn('mode', parsed)
         self.assertEqual(parsed['mode'], 'slice')
 
-        print(f"✅ parsed = {parsed}")
+        log.log_info("parsed", parsed=parsed)
 
     def test_processor_adds_mode_slice(self):
         """Проверяет, что процессор добавляет mode='slice' к read_file"""
@@ -142,7 +143,7 @@ class TestRealLLMResponse(unittest.TestCase):
         self.assertIn('mode', parsed_after)
         self.assertEqual(parsed_after['mode'], 'slice')
 
-        print(f"✅ After: {parsed_after}")
+        log.log_info("After", parsed=parsed_after)
 
     def test_processor_fixes_double_encoding(self):
         """Проверяет, что процессор исправляет двойное экранирование"""
@@ -166,7 +167,7 @@ class TestRealLLMResponse(unittest.TestCase):
         self.assertEqual(parsed['path'], "requests.py")
         self.assertEqual(parsed.get('mode'), 'slice')
 
-        print(f"✅ Fixed args: {parsed}")
+        log.log_info("Fixed args", parsed=parsed)
 
     def test_processor_search_files_double_encoding(self):
         """Проверяет, что процессор обрабатывает search_files без ошибок"""
@@ -194,7 +195,7 @@ class TestRealLLMResponse(unittest.TestCase):
         self.assertEqual(parsed['path'], ".")
         self.assertIn('regex', parsed)
 
-        print(f"✅ search_files parsed: {parsed}")
+        log.log_info("search_files parsed", parsed=parsed)
 
     def test_processor_list_files_double_encoding(self):
         """Проверяет, что процессор обрабатывает list_files без ошибок"""
@@ -222,7 +223,7 @@ class TestRealLLMResponse(unittest.TestCase):
         self.assertEqual(parsed['path'], ".")
         self.assertTrue(parsed['recursive'])
 
-        print(f"✅ list_files parsed: {parsed}")
+        log.log_info("list_files parsed", parsed=parsed)
 
 
 if __name__ == "__main__":

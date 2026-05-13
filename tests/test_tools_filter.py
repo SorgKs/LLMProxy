@@ -3,6 +3,7 @@
 Тест фильтрации инструментов (tools) по конфигурации config/tools.yaml
 """
 import os
+import log
 import tempfile
 import yaml
 import json
@@ -111,7 +112,7 @@ def test_filter_tools_by_config_true_kept_false_removed():
             for msg in processor.changes_log
         ), "В changes_log должна быть запись об удалении инструментов"
 
-        print("✅ test_filter_tools_by_config_true_kept_false_removed passed!")
+        log.log_info("test_filter_tools_by_config_true_kept_false_removed passed!")
 
     finally:
         # Убираем временный файл
@@ -168,7 +169,7 @@ def test_process_request_body_filters_tools():
         assert len(result["tools"]) == 1
         assert result["tools"][0]["function"]["name"] == "apply_diff"
 
-        print("✅ test_process_request_body_filters_tools passed!")
+        log.log_info("test_process_request_body_filters_tools passed!")
 
     finally:
         if os.path.exists(config_file):
@@ -199,7 +200,7 @@ def test_empty_tools_list():
         filtered2 = processor._filter_tools_by_config(None)
         assert filtered2 is None or filtered2 == []
 
-        print("✅ test_empty_tools_list passed!")
+        log.log_info("test_empty_tools_list passed!")
 
     finally:
         if os.path.exists(config_file):
@@ -210,4 +211,4 @@ if __name__ == "__main__":
     test_filter_tools_by_config_true_kept_false_removed()
     test_process_request_body_filters_tools()
     test_empty_tools_list()
-    print("\\n🎉 Все тесты пройдены!")
+    log.log_info("Все тесты пройдены!")
