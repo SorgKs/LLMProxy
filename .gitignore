@@ -9,6 +9,8 @@ logs/archive/
 # Responses
 generated/
 output/
+requests/
+responses/
 
 # Python
 temp/
