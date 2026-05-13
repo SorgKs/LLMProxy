@@ -1,5 +1,6 @@
 # answers.py
 import json
+import logging
 import re
 import time
 import copy
@@ -9,6 +10,8 @@ import handlers
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
 from log import log_response, log_retry_attempt
+
+logger = logging.getLogger(__name__)
 
 
 class ArgumentParseError(Exception):
@@ -365,7 +368,7 @@ class AnswerProcessor:
                 return default_config
                 
         except Exception as e:
-            print(f"[-] Ошибка загрузки {config_path}: {str(e)}")
+            logger.error(f"Ошибка загрузки {config_path}: {str(e)}")
             return default_config
     
     def _parse_arguments(self, args_str: str, tool_name: str = "unknown", tool_call_id: str = "unknown") -> Dict[str, Any]:
@@ -432,11 +435,11 @@ class AnswerProcessor:
     ) -> Optional[Dict[str, str]]:
         
         if not file_lines:
-            print(f"❌ function_replace: словарь file_lines пуст")
+            logger.error(f"function_replace: словарь file_lines пуст")
             return None
         
         if not isinstance(file_lines, dict):
-            print(f"❌ function_replace: file_lines должен быть dict, получен {type(file_lines)}")
+            logger.error(f"function_replace: file_lines должен быть dict, получен {type(file_lines)}")
             return None
         
         # Собираем старый код из словаря в правильном порядке
@@ -445,11 +448,11 @@ class AnswerProcessor:
             old_code_lines = [file_lines[k] for k in sorted_keys]
             old_code = '\n'.join(old_code_lines)
         except Exception as e:
-            print(f"❌ function_replace: ошибка при сборке кода: {e}")
+            logger.error(f"function_replace: ошибка при сборке кода: {e}")
             return None
         
         if not old_code.strip():
-            print(f"❌ function_replace: нет содержимого функции '{function_name}' в {path}")
+            logger.error(f"function_replace: нет содержимого функции '{function_name}' в {path}")
             return None
         
         # Формируем diff
@@ -506,12 +509,12 @@ class AnswerProcessor:
         
         # ВЫВОД ТОЛЬКО ПРИ ОШИБКАХ
         if invalid:
-            print(f"\n❌ НЕСУЩЕСТВУЮЩИЕ ИНСТРУМЕНТЫ:")
-            print(f"   Всего: {len(invalid)}")
+            logger.warning(f"НЕСУЩЕСТВУЮЩИЕ ИНСТРУМЕНТЫ:")
+            logger.warning(f"   Всего: {len(invalid)}")
             for inv in invalid:
-                print(f"   - {inv['tool_name']} (ID: {inv['tool_call_id']})")
-                print(f"     Причина: {inv['reason']}")
-                print(f"     Доступные инструменты: {inv['available_tools']}")
+                logger.warning(f"   - {inv['tool_name']} (ID: {inv['tool_call_id']})")
+                logger.warning(f"     Причина: {inv['reason']}")
+                logger.warning(f"     Доступные инструменты: {inv['available_tools']}")
         
         return len(invalid) == 0, invalid
 
@@ -787,7 +790,7 @@ class AnswerProcessor:
                     config = yaml.safe_load(f)
                     return config.get('tools', {})
         except Exception as e:
-            print(f"[-] Ошибка загрузки {config_path}: {e}")
+            logger.error(f"Ошибка загрузки {config_path}: {e}")
         return {}
 
     def _check_field_type(self, value: Any, expected_type: str) -> bool:
@@ -973,36 +976,36 @@ class AnswerProcessor:
                 function_name = parsed_args.get("function", "")
                 full_code = parsed_args.get("full_code", "")
                 
-                print(f"[DEBUG function_replace] Начало обработки")
-                print(f"   - path: {path}")
-                print(f"   - function_name: {function_name}")
-                print(f"   - full_code length: {len(full_code)}")
-                print(f"   - data is None: {data is None}")
+                logger.debug(f"[DEBUG function_replace] Начало обработки")
+                logger.debug(f"   - path: {path}")
+                logger.debug(f"   - function_name: {function_name}")
+                logger.debug(f"   - full_code length: {len(full_code)}")
+                logger.debug(f"   - data is None: {data is None}")
                 
                 if data and data.get("type") == "function_content":
                     content_dict = data.get("content", {})
-                    print(f"   - content_dict type: {type(content_dict)}")
-                    print(f"   - content_dict keys count: {len(content_dict.keys()) if content_dict else 0}")
+                    logger.debug(f"   - content_dict type: {type(content_dict)}")
+                    logger.debug(f"   - content_dict keys count: {len(content_dict.keys()) if content_dict else 0}")
                     
                     if content_dict:
-                        print(f"   ✓ Вызов _convert_function_replace...")
+                        logger.debug(f"   ✓ Вызов _convert_function_replace...")
                         # ПЕРЕДАЕМ СЛОВАРЬ НАПРЯМУЮ
                         diff_result = self._convert_function_replace(path, function_name, full_code, content_dict)
                         
                         if diff_result:
-                            print(f"   ✓ Конвертация успешна!")
+                            logger.debug(f"   ✓ Конвертация успешна!")
                             tc['function']['name'] = 'apply_diff'
                             # Оставляем как dict, не сериализуем
                             tc['function']['arguments'] = {'path': path, 'diff': diff_result['diff']}
                             return True, [f"function_replace: конвертирован в apply_diff"]
                         else:
-                            print(f"   ❌ _convert_function_replace вернул None")
+                            logger.warning(f"   ❌ _convert_function_replace вернул None")
                             return False, [f"function_replace: не удалось заменить '{function_name}'"]
                     else:
-                        print(f"   ❌ content_dict пуст")
+                        logger.warning(f"   ❌ content_dict пуст")
                         return False, [f"function_replace: нет данных функции '{function_name}' в {path}"]
                 else:
-                    print(f"   ❌ Нет данных function_content")
+                    logger.warning(f"   ❌ Нет данных function_content")
                     return False, [f"function_replace: нет данных функции"]
                                 
         except Exception as e:
@@ -1073,12 +1076,12 @@ class AnswerProcessor:
                     )
                     tc_copy['function']['arguments'] = parsed_args
                 except ArgumentParseError as e:
-                    # Логируем ошибку в консоль
-                    print(f"\n❌ ОШИБКА ПАРСИНГА АРГУМЕНТОВ")
-                    print(f"   Tool: {e.tool_name}")
-                    print(f"   ID: {e.tool_call_id}")
-                    print(f"   Ошибка: {e}")
-                    print(f"   Аргументы: {e.original_args[:200] if e.original_args else 'None'}...")
+                    # Логируем ошибку
+                    logger.error(f"ОШИБКА ПАРСИНГА АРГУМЕНТОВ")
+                    logger.error(f"   Tool: {e.tool_name}")
+                    logger.error(f"   ID: {e.tool_call_id}")
+                    logger.error(f"   Ошибка: {e}")
+                    logger.error(f"   Аргументы: {e.original_args[:200] if e.original_args else 'None'}...")
                     
                     # Отправляем сообщение в LLM через существующий механизм retry
                     error_message = self._send_parse_error_to_llm(answer, e, tc['id'])
@@ -1148,11 +1151,11 @@ class AnswerProcessor:
         # 5. Валидация всех tool calls
         is_valid, validation_errors = self.validate_tool_calls(answer)
         if not is_valid:
-            print(f"❌ Tool call validation failed: {validation_errors}")
+            logger.error(f"Tool call validation failed: {validation_errors}")
             for error in validation_errors:
                 error_tool_name = error.get('tool_name')
                 error_message = error.get('message')
-                print(f"   - {error_tool_name}: {error_message}")
+                logger.error(f"   - {error_tool_name}: {error_message}")
         
         # 6. Логируем результат
         log_response(
@@ -1163,7 +1166,7 @@ class AnswerProcessor:
         # 7. Выводим статистику
         if self._was_changed:
             for change in self.changes_log:
-                print(f"      - {change}")
+                logger.info(f"      - {change}")
         
         return None
 
@@ -1574,11 +1577,11 @@ class AnswerProcessor:
             debug: если True, выводит отладочную информацию
         """
         if debug:
-            print("\n" + "="*60)
-            print("НАЧАЛЬНЫЙ DIFF:")
-            print("*"*40)
-            print(diff_text)
-            print("*"*40)
+            logger.debug("\n" + "="*60)
+            logger.debug("НАЧАЛЬНЫЙ DIFF:")
+            logger.debug("*" * 40)
+            logger.debug(diff_text)
+            logger.debug("*" * 40)
         
         lines = diff_text.split('\n')
         changed = False
@@ -1586,10 +1589,10 @@ class AnswerProcessor:
         
         def print_step(step_num, description):
             if debug:
-                print(f"\n--- ШАГ {step_num}: {description} ---")
-                print("*"*40)
-                print('\n'.join(lines))
-                print("*"*40)
+                logger.debug(f"\n--- ШАГ {step_num}: {description} ---")
+                logger.debug("*" * 40)
+                logger.debug('\n'.join(lines))
+                logger.debug("*" * 40)
         
         # Шаг 1: Ищем любые разделители, меняем на "======="
         separator_patterns = [
@@ -1610,7 +1613,7 @@ class AnswerProcessor:
             for pattern in separator_patterns:
                 if re.match(pattern, line_stripped):
                     if debug and line_stripped != '=======':
-                        print(f"  Заменяем разделитель на строке {i}: '{line_stripped}' -> '======='")
+                        logger.debug(f"  Заменяем разделитель на строке {i}: '{line_stripped}' -> '======='")
                     lines[i] = '======='
                     changed = True
                     separator_indices.append(i)
@@ -1626,7 +1629,7 @@ class AnswerProcessor:
             if separator_indices[i+1] == separator_indices[i] + 1:
                 # Подряд идущие разделители - удаляем первый
                 if debug:
-                    print(f"  Удаляем дублирующийся разделитель на строке {separator_indices[i]}")
+                    logger.debug(f"  Удаляем дублирующийся разделитель на строке {separator_indices[i]}")
                 del lines[separator_indices[i]]
                 # Обновляем индексы: все последующие уменьшаем на 1
                 for j in range(i+1, len(separator_indices)):
@@ -1644,7 +1647,7 @@ class AnswerProcessor:
         # Шаг 3: Если в начале нет разделителя - добавляем
         if not separator_indices or separator_indices[0] != 0:
             if debug:
-                print("  Добавляем разделитель в начало")
+                logger.debug("  Добавляем разделитель в начало")
             lines.insert(0, '=======')
             separator_indices = [i+1 for i in separator_indices]
             separator_indices.insert(0, 0)
@@ -1657,7 +1660,7 @@ class AnswerProcessor:
         # Шаг 4: Если в конце нет разделителя - добавляем
         if not separator_indices or separator_indices[-1] != len(lines) - 1:
             if debug:
-                print("  Добавляем разделитель в конец")
+                logger.debug("  Добавляем разделитель в конец")
             lines.append('=======')
             separator_indices.append(len(lines) - 1)
             changed = True
@@ -1668,11 +1671,11 @@ class AnswerProcessor:
         
         # Шаг 5: Проверяем количество разделителей
         if debug:
-            print(f"  Текущее количество разделителей: {len(separator_indices)}")
+            logger.debug(f"  Текущее количество разделителей: {len(separator_indices)}")
         
         if len(separator_indices) == 3:
             if debug:
-                print("  Обнаружено 3 разделителя, добавляем :start_line: и разделитель")
+                logger.debug("  Обнаружено 3 разделителя, добавляем :start_line: и разделитель")
             # После первого добавляем :start_line: и разделитель
             lines.insert(separator_indices[0] + 1, ':start_line:1')
             lines.insert(separator_indices[0] + 2, '-------')
@@ -1691,12 +1694,12 @@ class AnswerProcessor:
         # Шаг 6: Проверяем количество разделителей
         if len(separator_indices) != 4:
             if debug:
-                print(f"❌ Ошибка: найдено {len(separator_indices)} разделителей, нужно 4")
-                print(f"   Индексы разделителей: {separator_indices}")
+                logger.debug(f"❌ Ошибка: найдено {len(separator_indices)} разделителей, нужно 4")
+                logger.debug(f"   Индексы разделителей: {separator_indices}")
             return None
         
         if debug:
-            print(f"  ✓ Найдено 4 разделителя на позициях: {separator_indices}")
+            logger.debug(f"  ✓ Найдено 4 разделителя на позициях: {separator_indices}")
 
         # Шаг 6.5: Убираем пробелы в начале строк с :start_line: и :end_line:
         for i, line in enumerate(lines):
@@ -1704,7 +1707,7 @@ class AnswerProcessor:
             if stripped.startswith(':start_line:') or stripped.startswith(':end_line:'):
                 if line != stripped:
                     if debug:
-                        print(f"  Убираем пробелы в строке {i}: '{line}' -> '{stripped}'")
+                        logger.debug(f"  Убираем пробелы в строке {i}: '{line}' -> '{stripped}'")
                     lines[i] = stripped
                     changed = True
 
@@ -1713,25 +1716,25 @@ class AnswerProcessor:
         old = lines[separator_indices[0]]
         lines[separator_indices[0]] = '<<<<<<< SEARCH'
         if debug:
-            print(f"  Разделитель 1 (строка {separator_indices[0]}): '{old}' -> '<<<<<<< SEARCH'")
+            logger.debug(f"  Разделитель 1 (строка {separator_indices[0]}): '{old}' -> '<<<<<<< SEARCH'")
         
         # 2-й разделитель: -------
         old = lines[separator_indices[1]]
         lines[separator_indices[1]] = '-------'
         if debug:
-            print(f"  Разделитель 2 (строка {separator_indices[1]}): '{old}' -> '-------'")
+            logger.debug(f"  Разделитель 2 (строка {separator_indices[1]}): '{old}' -> '-------'")
         
         # 3-й разделитель: =======
         old = lines[separator_indices[2]]
         lines[separator_indices[2]] = '======='
         if debug:
-            print(f"  Разделитель 3 (строка {separator_indices[2]}): '{old}' -> '======='")
+            logger.debug(f"  Разделитель 3 (строка {separator_indices[2]}): '{old}' -> '======='")
         
         # 4-й разделитель: >>>>>>> REPLACE
         old = lines[separator_indices[3]]
         lines[separator_indices[3]] = '>>>>>>> REPLACE'
         if debug:
-            print(f"  Разделитель 4 (строка {separator_indices[3]}): '{old}' -> '>>>>>>> REPLACE'")
+            logger.debug(f"  Разделитель 4 (строка {separator_indices[3]}): '{old}' -> '>>>>>>> REPLACE'")
         
         if debug:
             print_step(step, "После замены разделителей на правильные")
@@ -1749,11 +1752,11 @@ class AnswerProcessor:
 
         
         if debug:
-            print("\n" + "="*60)
-            print("ИТОГОВЫЙ DIFF:")
-            print("-"*40)
-            print(result)
-            print("="*60 + "\n")
+            logger.debug("\n" + "="*60)
+            logger.debug("ИТОГОВЫЙ DIFF:")
+            logger.debug("-" * 40)
+            logger.debug(result)
+            logger.debug("=" * 60 + "\n")
         
         return result if changed else diff_text
 
@@ -1898,31 +1901,23 @@ def _extract_search_content(self, diff: str) -> Optional[str]:
 
     **Что делать:** Проверьте синтаксис аргументов и попробуйте еще раз.
     """
-        
-        # Логируем ошибку в консоль
+
+        # Логируем ошибку
         timestamp = datetime.now().isoformat()
-        print(f"\n{'='*60}")
-        print(f"❌ ОШИБКА ПАРСИНГА АРГУМЕНТОВ")
-        print(f"{'='*60}")
-        print(f"📅 Время: {timestamp}")
-        print(f"🔧 Tool: {error.tool_name}")
-        print(f"🆔 Tool Call ID: {error.tool_call_id}")
-        print(f"📝 Ошибка: {error}")
-        print(f"\n📄 Аргументы (первые 500 символов):")
-        print(f"{'-'*40}")
-        print(f"{error.original_args[:500] if error.original_args else 'None'}")
-        if error.original_args and len(error.original_args) > 500:
-            print(f"... (и еще {len(error.original_args) - 500} символов)")
-        print(f"{'-'*40}")
-        print(f"🤖 Модель: {answer.model}")
-        print(f"💬 Conversation ID: {self.conversation_id or 'unknown'}")
-        print(f"\n📤 Отправляем запрос на переформулирование в LLM...")
-        print(f"{'='*60}\n")
-        
+        logger.error(f"ОШИБКА ПАРСИНГА АРГУМЕНТОВ")
+        logger.error(f"📅 Время: {timestamp}")
+        logger.error(f"🔧 Tool: {error.tool_name}")
+        logger.error(f"🆔 Tool Call ID: {error.tool_call_id}")
+        logger.error(f"📝 Ошибка: {error}")
+        logger.error(f"📄 Аргументы (первые 500 символов): {error.original_args[:500] if error.original_args else 'None'}...")
+        logger.error(f"🤖 Модель: {answer.model}")
+        logger.error(f"💬 Conversation ID: {self.conversation_id or 'unknown'}")
+        logger.error(f"📤 Отправляем запрос на переформулирование в LLM...")
+
         # Создаем сообщение для добавления в историю
         retry_message = {
             "role": "user",
             "content": error_message
         }
-        
+
         return retry_message

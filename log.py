@@ -1,8 +1,19 @@
 # log.py
 import json
+import logging
 import os
 from datetime import datetime
 from typing import Optional, Dict, Any, List
+
+# Configure logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
 # Конфигурация логов
 LOG_DIR = "logs"
@@ -14,7 +25,7 @@ MAIN_LOG = os.path.join(LOG_DIR, "main.log")
 
 def log_info(message: str, **kwargs):
     """
-    Записывает информационное сообщение в main.log.
+    Записывает информационное сообщение в main.log и консоль.
     
     Args:
         message: Текст сообщения
@@ -27,11 +38,13 @@ def log_info(message: str, **kwargs):
         **kwargs
     }
     _write_log(entry)
+    # Выводим Also в консоль
+    logger.info(message)
 
 
 def log_debug(message: str, **kwargs):
     """
-    Записывает отладочное сообщение в main.log.
+    Записывает отладочное сообщение в main.log и консоль.
     
     Args:
         message: Текст сообщения
@@ -44,6 +57,8 @@ def log_debug(message: str, **kwargs):
         **kwargs
     }
     _write_log(entry)
+    # Выводим Also в консоль
+    logger.debug(message)
 
 
 def log_modified_request(method: str, url: str, headers: dict,
@@ -127,4 +142,4 @@ def _write_log(data: Dict):
         with open(MAIN_LOG, "a", encoding="utf-8") as f:
             f.write(json.dumps(data, ensure_ascii=False) + "\n")
     except Exception as e:
-        print(f"[-] Ошибка записи в лог {MAIN_LOG}: {e}")
+        logger.error(f"Ошибка записи в лог {MAIN_LOG}: {e}")

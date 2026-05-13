@@ -1,5 +1,6 @@
 # requests.py
 import json
+import logging
 import re
 import copy
 import os
@@ -7,6 +8,8 @@ import yaml
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Callable
 from scanner import ProjectStructureScanner
+
+logger = logging.getLogger(__name__)
 
 
 class RequestProcessor:
@@ -280,7 +283,7 @@ class RequestProcessor:
             if isinstance(tool_config, list):
                 occurrence_counts[tool_name] = occurrence_counts.get(tool_name, 0) + 1
                 index = occurrence_counts[tool_name] - 1
-                print(f"[DEBUG] Tool: {tool_name}, config: {tool_config}, index: {index if isinstance(tool_config, list) else 'N/A'}")
+                logger.debug(f"Tool: {tool_name}, config: {tool_config}, index: {index}")
                 # Если индекс в пределах списка и значение True - оставляем
                 if index < len(tool_config) and tool_config[index]:
                     filtered_tools.append(tool)
@@ -782,11 +785,7 @@ class RequestProcessor:
             if message.get("role") == "user" and "content" in message:
                 content = message["content"]
                 if isinstance(content, str) and combined_pattern.search(content):
-                    print(f"\n⚠️ UNSUCCESSFUL apply_diff DETECTED in client request")
-                    print(f"   Message {i}: {message.get('role', 'unknown')}")
-                    preview = content[:300].replace('\n', ' ')
-                    print(f"   Content preview: {preview}...")
-                    print()
+                    logger.warning(f"UNSUCCESSFUL apply_diff DETECTED in client request, Message {i}: {message.get('role', 'unknown')}, Content preview: {content[:300].replace(chr(10), ' ')}...")
                     break
 
     def _cleanup_requests_folder(self) -> None:
@@ -828,7 +827,7 @@ class RequestProcessor:
                 os.remove(filepath)
                 
         except Exception as e:
-            print(f"[-] Ошибка при очистке папки requests: {e}")
+            logger.error(f"Ошибка при очистке папки requests: {e}")
 
     def _save_original_request(self, body: dict) -> None:
         """Сохраняет исходный запрос в файл requests/original_request_<timestamp>.json"""
@@ -848,7 +847,7 @@ class RequestProcessor:
             # Очищаем старые файлы после сохранения
             self._cleanup_requests_folder()
         except Exception as e:
-            print(f"[-] Ошибка при сохранении исходного запроса: {e}")
+            logger.error(f"Ошибка при сохранении исходного запроса: {e}")
 
     def _save_modified_request(self, modified_body: dict, modifications: List[str]) -> None:
         """Сохраняет модифицированный запрос в файл requests/modified_request_<timestamp>.json"""
@@ -869,7 +868,7 @@ class RequestProcessor:
             # Очищаем старые файлы после сохранения
             self._cleanup_requests_folder()
         except Exception as e:
-            print(f"[-] Ошибка при сохранении модифицированного запроса: {e}")
+            logger.error(f"Ошибка при сохранении модифицированного запроса: {e}")
     
     def get_summary_stats(self) -> Dict:
         """
@@ -897,38 +896,38 @@ class RequestProcessor:
         """Выводит красиво отформатированную статистику"""
         stats = self.get_summary_stats()
         
-        print("\n" + "="*80)
-        print("📊 СТАТИСТИКА ОБРАБОТКИ ЗАПРОСОВ")
-        print("="*80)
-        print(f"Всего запросов: {stats['total_requests']}")
-        print(f"Модифицировано: {stats['modified_requests']} ({stats['modification_percent']:.1f}%)")
-        print(f"Всего сохранено символов: {stats['total_chars_saved']}")
-        print(f"Средняя экономия: {stats['avg_percent_saved']:.1f}%")
-        print(f"Примерно сохранено токенов: {stats['estimated_tokens_saved']}")
-        print("-"*80)
+        logger.info("="*80)
+        logger.info("СТАТИСТИКА ОБРАБОТКИ ЗАПРОСОВ")
+        logger.info("="*80)
+        logger.info(f"Всего запросов: {stats['total_requests']}")
+        logger.info(f"Модифицировано: {stats['modified_requests']} ({stats['modification_percent']:.1f}%)")
+        logger.info(f"Всего сохранено символов: {stats['total_chars_saved']}")
+        logger.info(f"Средняя экономия: {stats['avg_percent_saved']:.1f}%")
+        logger.info(f"Примерно сохранено токенов: {stats['estimated_tokens_saved']}")
+        logger.info("-"*80)
         
         if stats['by_model']:
-            print("По моделям:")
+            logger.info("По моделям:")
             for model, model_stats in stats['by_model'].items():
                 mod_percent = (model_stats['modified'] / model_stats['requests'] * 100) if model_stats['requests'] > 0 else 0
-                print(f"  • {model}:")
-                print(f"      Запросов: {model_stats['requests']}")
-                print(f"      Модифицировано: {model_stats['modified']} ({mod_percent:.1f}%)")
-                print(f"      Сохранено символов: {model_stats['chars_saved']}")
+                logger.info(f"  • {model}:")
+                logger.info(f"      Запросов: {model_stats['requests']}")
+                logger.info(f"      Модифицировано: {model_stats['modified']} ({mod_percent:.1f}%)")
+                logger.info(f"      Сохранено символов: {model_stats['chars_saved']}")
         
         # Добавляем информацию о кэше структуры
         if self._cached_structure:
-            print("-"*80)
-            print(f"📁 Структура проекта закэширована: {len(self._cached_structure)} символов")
+            logger.info("-"*80)
+            logger.info(f"Структура проекта закэширована: {len(self._cached_structure)} символов")
         
         # Добавляем информацию о конфигурации инструментов
-        print("-"*80)
-        print("🔧 Конфигурация инструментов из config/tools.yaml:")
+        logger.info("-"*80)
+        logger.info("Конфигурация инструментов из config/tools.yaml:")
         for tool_name, enabled in self.tools_config.items():
-            status = "✅" if enabled else "❌"
-            print(f"  {status} {tool_name}")
+            status = "enabled" if enabled else "disabled"
+            logger.info(f"  {status} {tool_name}")
         
-        print("="*80)
+        logger.info("="*80)
 
 
 # Для обратной совместимости

@@ -4,6 +4,7 @@ import json
 import uuid
 import re
 import copy
+import logging
 from datetime import datetime
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
@@ -15,6 +16,13 @@ import atexit
 import traceback
 from answers import AnswerProcessor, ArgumentParseError
 from log import log_response, log_retry_attempt, log_info, log_debug
+
+# Настройка логгера
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Load environment variables
 try:
@@ -55,20 +63,7 @@ def _log_parse_error(error: ArgumentParseError, answer) -> None:
               conversation_id=getattr(answer, 'conversation_id', 'unknown'))
     
     # ВЫВОД В КОНСОЛЬ (ГЛАВНОЕ)
-    timestamp = datetime.now().isoformat()
-    print(f"\n{'='*60}")
-    print(f"❌ ОШИБКА ПАРСИНГА АРГУМЕНТОВ")
-    print(f"{'='*60}")
-    print(f"📅 Время: {timestamp}")
-    print(f"🔧 Tool: {error.tool_name}")
-    print(f"🆔 Tool Call ID: {error.tool_call_id}")
-    print(f"📝 Ошибка: {error}")
-    print(f"📄 Аргументы (первые 200 символов):")
-    print(f"   {error.original_args[:200] if error.original_args else 'None'}...")
-    print(f"🤖 Модель: {answer.model}")
-    print(f"⏱️ Длительность: {answer.duration:.2f}с")
-    print(f"💬 Conversation ID: {getattr(answer, 'conversation_id', 'unknown')}")
-    print(f"{'='*60}\n")
+    logger.error(f"ОШИБКА ПАРСИНГА АРГУМЕНТОВ | Tool: {error.tool_name} | Tool Call ID: {error.tool_call_id} | Ошибка: {error} | Аргументы: {error.original_args[:200] if error.original_args else 'None'}... | Модель: {answer.model} | Длительность: {answer.duration:.2f}с | Conversation ID: {getattr(answer, 'conversation_id', 'unknown')}")
 
 
 def _log_processing_error(error: Exception, answer, stage: str) -> None:
@@ -84,22 +79,22 @@ def _log_processing_error(error: Exception, answer, stage: str) -> None:
     
     # ВЫВОД В КОНСОЛЬ (ГЛАВНОЕ)
     timestamp = datetime.now().isoformat()
-    print(f"\n{'='*60}")
-    print(f"⚠️ ОШИБКА ОБРАБОТКИ [{stage.upper()}]")
-    print(f"{'='*60}")
-    print(f"📅 Время: {timestamp}")
-    print(f"🔥 Тип ошибки: {type(error).__name__}")
-    print(f"📝 Сообщение: {error}")
-    print(f"🤖 Модель: {answer.model}")
-    print(f"⏱️ Длительность: {answer.duration:.2f}с")
-    print(f"💬 Conversation ID: {getattr(answer, 'conversation_id', 'unknown')}")
+    logger.info(f"\n{'='*60}")
+    logger.error(f"⚠️ ОШИБКА ОБРАБОТКИ [{stage.upper()}]")
+    logger.info(f"{'='*60}")
+    logger.info(f"📅 Время: {timestamp}")
+    logger.error(f"🔥 Тип ошибки: {type(error).__name__}")
+    logger.error(f"📝 Сообщение: {error}")
+    logger.info(f"🤖 Модель: {answer.model}")
+    logger.info(f"⏱️ Длительность: {answer.duration:.2f}с")
+    logger.info(f"💬 Conversation ID: {getattr(answer, 'conversation_id', 'unknown')}")
     
     # Показываем traceback для отладки
     if stage in ["parsing", "validation", "serialization"]:
-        print(f"\n📚 Traceback (для отладки):")
+        logger.info(f"\n📚 Traceback (для отладки):")
         traceback.print_exc()
     
-    print(f"{'='*60}\n")
+    logger.info(f"{'='*60}\n")
 
 
 def _log_fatal_error(error: Exception, answer, context: str) -> None:
@@ -117,18 +112,18 @@ def _log_fatal_error(error: Exception, answer, context: str) -> None:
     
     # ВЫВОД В КОНСОЛЬ (ГЛАВНОЕ)
     timestamp = datetime.now().isoformat()
-    print(f"\n{'='*60}")
-    print(f"💥 ФАТАЛЬНАЯ ОШИБКА [{context.upper()}]")
-    print(f"{'='*60}")
-    print(f"📅 Время: {timestamp}")
-    print(f"🔥 Тип ошибки: {type(error).__name__}")
-    print(f"📝 Сообщение: {error}")
+    logger.info(f"\n{'='*60}")
+    logger.error(f"💥 ФАТАЛЬНАЯ ОШИБКА [{context.upper()}]")
+    logger.info(f"{'='*60}")
+    logger.info(f"📅 Время: {timestamp}")
+    logger.error(f"🔥 Тип ошибки: {type(error).__name__}")
+    logger.error(f"📝 Сообщение: {error}")
     if answer:
-        print(f"🤖 Модель: {answer.model}")
-        print(f"⏱️ Длительность: {answer.duration:.2f}с")
-    print(f"\n📚 Полный traceback:")
+        logger.info(f"🤖 Модель: {answer.model}")
+        logger.info(f"⏱️ Длительность: {answer.duration:.2f}с")
+    logger.info(f"\n📚 Полный traceback:")
     traceback.print_exc()
-    print(f"{'='*60}\n")
+    logger.info(f"{'='*60}\n")
 
 def _extract_data_from_request(
     pending_info: Dict[str, Any],
@@ -150,52 +145,52 @@ def _extract_data_from_request(
     
     path = pending_info.get("path")
     if not path:
-        print(f"[DEBUG _extract_data_from_request] Нет path в pending_info")
+        logger.info(f"[DEBUG _extract_data_from_request] Нет path в pending_info")
         return None
     
     action = pending_info.get("action")
     if not action:
-        print(f"[DEBUG _extract_data_from_request] Нет action в pending_info")
+        logger.info(f"[DEBUG _extract_data_from_request] Нет action в pending_info")
         return None
     
-    print(f"[DEBUG _extract_data_from_request] Извлекаем данные для {action}: path={path}")
+    logger.info(f"[DEBUG _extract_data_from_request] Извлекаем данные для {action}: path={path}")
     
     # Извлекаем сырой контент файла из запроса
     extracted = _extract_file_content_from_request(request_body, path)
     if extracted is None:
-        print(f"[DEBUG _extract_data_from_request] Не удалось извлечь содержимое файла '{path}'")
+        logger.info(f"[DEBUG _extract_data_from_request] Не удалось извлечь содержимое файла '{path}'")
         return None
     
-    print(f"[DEBUG _extract_data_from_request] Получены сырые данные для файла '{path}'")
+    logger.info(f"[DEBUG _extract_data_from_request] Получены сырые данные для файла '{path}'")
     
     # В зависимости от действия проверяем полноту данных
     if action == "request_file":
         # Для файла: проверяем целостность (непрерывность от 1 до N, EOF)
         ready_data = check_file_sufficiency(extracted, pending_info)
         if ready_data:
-            print(f"✓ Файл '{path}' найден и полный")
+            logger.info(f"✓ Файл '{path}' найден и полный")
             return ready_data
         else:
-            print(f"⚠️ Файл '{path}' неполный или отсутствует в запросе")
+            logger.warning(f"⚠️ Файл '{path}' неполный или отсутствует в запросе")
             return None
     
     elif action == "request_function":
         # Для функции: проверяем наличие полного определения
         function_name = pending_info.get("function_name")
         if not function_name:
-            print(f"[DEBUG _extract_data_from_request] Нет function_name в pending_info")
+            logger.info(f"[DEBUG _extract_data_from_request] Нет function_name в pending_info")
             return None
         
         ready_data = check_function_sufficiency(extracted, function_name)
         if ready_data:
-            print(f"✓ Функция '{function_name}()' в '{path}' найдена и полная")
+            logger.info(f"✓ Функция '{function_name}()' в '{path}' найдена и полная")
             return ready_data
         else:
-            print(f"⚠️ Функция '{function_name}()' в '{path}' неполная или отсутствует")
+            logger.warning(f"⚠️ Функция '{function_name}()' в '{path}' неполная или отсутствует")
             return None
     
     else:
-        print(f"[DEBUG _extract_data_from_request] Неизвестное действие: {action}")
+        logger.info(f"[DEBUG _extract_data_from_request] Неизвестное действие: {action}")
         return None
 
 def _extract_file_content_from_request(
@@ -366,7 +361,7 @@ def _extract_file_content_from_request(
             parts = line.split('| ', 1)
             #print(parts)
             if len(parts) != 2:
-                print(f"[DEBUG _extract_file_content_from_request] Разбиение по | не сработало")
+                logger.info(f"[DEBUG _extract_file_content_from_request] Разбиение по | не сработало")
             
             # Левая часть - номер строки
             try:
@@ -476,12 +471,12 @@ def check_function_sufficiency(data: dict, function_name: str) -> Optional[str]:
     #print(f"[DEBUG check_function_sufficiency] line_count: {data.get('line_count')}")
 
     if not data or not isinstance(data, dict):
-        print(f"[DEBUG check_function_sufficiency] data is None or not dict")
+        logger.info(f"[DEBUG check_function_sufficiency] data is None or not dict")
         return None
 
     content = data.get('content')
     if not content:
-        print(f"[DEBUG check_function_sufficiency] No content")
+        logger.info(f"[DEBUG check_function_sufficiency] No content")
         return None
 
     # Поиск строки с определением функции
@@ -797,7 +792,7 @@ async def proxy_chat_completions(request: Request):
         available_tools = [tool.get("function", {}).get("name", "") for tool in modified_body["tools"]]
     
     # 📤 Вывод информации о запросе (метаданные) + файл (полный контент)
-    print(f"{datetime.now().isoformat()} | REQ | size={len(str(body))} | tools={len(available_tools)}")
+    logger.info(f"{datetime.now().isoformat()} | REQ | size={len(str(body))} | tools={len(available_tools)}")
     
     # Настройки self-correction
     max_corrections = 2
@@ -862,7 +857,7 @@ async def proxy_chat_completions(request: Request):
                 )
             except MaxRetriesExceededError as e:
                 # Сетевые сбои - отдаём ошибку клиенту
-                print(f"❌ LLM request failed after retries: {e}")
+                logger.error(f"❌ LLM request failed after retries: {e}")
                 return Response(
                     content=json.dumps({"error": f"LLM request failed: {str(e)}"}),
                     status_code=504,
@@ -888,9 +883,9 @@ async def proxy_chat_completions(request: Request):
                 
                 desc = ' | '.join(desc_parts)
                 if desc:
-                    print(f"❌ LLM API error: status={status_code} | {desc}")
+                    logger.error(f"❌ LLM API error: status={status_code} | {desc}")
                 else:
-                    print(f"❌ LLM API error: status={status_code}")
+                    logger.error(f"❌ LLM API error: status={status_code}")
                 return create_error_response(collected_data, is_stream)
             
             # Создание Answer объекта
@@ -917,7 +912,7 @@ async def proxy_chat_completions(request: Request):
             # Сохраняем оригинальный ответ в файл немедленно после получения
             save_responce(modified=False, full_responce=answer.full_response)
             tools_list = ",".join([tc.get("function", {}).get("name", "") for tc in answer.tool_calls if "function" in tc])
-            print(f"{datetime.now().isoformat()} | ANS | size={len(str(answer.full_response))} | status={answer.status_code} | {tools_list} | duration={answer.duration:.2f}s")
+            logger.info(f"{datetime.now().isoformat()} | ANS | size={len(str(answer.full_response))} | status={answer.status_code} | {tools_list} | duration={answer.duration:.2f}s")
         
         # ✅ ОБРАБОТКА ОТВЕТА (исправление форматирования и т.д.)
         process_result = answer_processor.process(answer, data=pending_data)
@@ -951,7 +946,7 @@ async def proxy_chat_completions(request: Request):
                 
             else:
                 # Неизвестное действие - логируем и продолжаем
-                print(f"⚠️ Unknown action: {action}")
+                logger.warning(f"⚠️ Unknown action: {action}")
 
         # ✅ ПРОВЕРКА СУЩЕСТВОВАНИЯ TOOL CALLS
         is_valid, invalid_tools = answer_processor.validate_tool_calls_exist(
@@ -979,7 +974,7 @@ async def proxy_chat_completions(request: Request):
         )
         
         # Логируем correction запрос через log_modified_request (файл) + консоль (метаданные)
-        print(f"{datetime.now().isoformat()} | correction | attempt={correction_attempt} | invalid_tools={len(invalid_tools)}")
+        logger.info(f"{datetime.now().isoformat()} | correction | attempt={correction_attempt} | invalid_tools={len(invalid_tools)}")
         
     # Отправка ответа клиенту
     if final_answer is None:
@@ -995,7 +990,7 @@ async def proxy_chat_completions(request: Request):
     save_responce(modified=True, full_responce=final_answer.full_response)
     
     tools_list = ",".join([tc.get("function", {}).get("name", "") for tc in final_answer.tool_calls if "function" in tc])
-    print(f"{datetime.now().isoformat()} | ANS | size={len(str(final_answer.full_response))} | status={final_answer.status_code} | {tools_list} | duration={final_answer.duration:.2f}s")
+    logger.info(f"{datetime.now().isoformat()} | ANS | size={len(str(final_answer.full_response))} | status={final_answer.status_code} | {tools_list} | duration={final_answer.duration:.2f}s")
     
     return Response(
         content=json.dumps(final_answer.full_response),
@@ -1015,19 +1010,19 @@ def save_responce(modified: bool, full_responce: Dict[str, Any]) -> None:
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump(full_responce, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"[-] Ошибка при сохранении ответа: {e}")
+        logger.info(f"[-] Ошибка при сохранении ответа: {e}")
 
 
 if __name__ == "__main__":
     import uvicorn
     
-    print("="*60)
-    print("🚀 OpenRouter Proxy Server")
-    print("="*60)
-    print(f"📡 OpenRouter URL: {LITELLM_URL}")
-    print(f"🔑 API Key: {OPENROUTER_API_KEY[:20] if OPENROUTER_API_KEY else 'NOT SET'}...")
-    print(f"🌐 Server: http://0.0.0.0:8000")
-    print("="*60)
+    logger.info("=" * 60)
+    logger.info("🚀 OpenRouter Proxy Server")
+    logger.info("=" * 60)
+    logger.info(f"📡 OpenRouter URL: {LITELLM_URL}")
+    logger.info(f"🔑 API Key: {OPENROUTER_API_KEY[:20] if OPENROUTER_API_KEY else 'NOT SET'}...")
+    logger.info(f"🌐 Server: http://0.0.0.0:8000")
+    logger.info("=" * 60)
     
     # Запуск сервера
     uvicorn.run(

@@ -1,7 +1,10 @@
 import ast
+import logging
 import os
 from pathlib import Path
 from typing import List, Tuple, Union, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class ProjectStructureScanner:
@@ -194,6 +197,6 @@ if __name__ == "__main__":
     scanner = ProjectStructureScanner()
     try:
         structure = scanner.scan(".", lang="python")
-        print(structure)
+        logger.info(structure)
     except Exception as e:
-        print(f"Ошибка: {e}")
+        logger.error(f"Ошибка: {e}")
