@@ -9,7 +9,7 @@ import yaml
 import handlers
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
-from log import log_response, log_retry_attempt
+from log import log_response
 
 logger = logging.getLogger(__name__)
 
@@ -21,93 +21,6 @@ class ArgumentParseError(Exception):
         self.tool_call_id = tool_call_id
         self.original_args = original_args
         super().__init__(message)
-        
-
-class RetryManager:
-    """
-    Управляет повторными попытками отправки запросов к LLM.
-    """
-    
-    def __init__(self, max_retries: int = 2):
-        """
-        Инициализация менеджера retry.
-        
-        Args:
-            max_retries: Максимальное количество повторных попыток (по умолчанию 2)
-        """
-        self.max_retries = max_retries
-        self.retry_history = {}  # history by conversation_id or tool_call_id
-    
-    def should_retry(self, conversation_id: str, tool_call_id: str) -> bool:
-        """
-        Проверяет, нужно ли делать еще одну попытку.
-        
-        Args:
-            conversation_id: ID диалога
-            tool_call_id: ID tool call
-            
-        Returns:
-            True если нужно retry, False если лимит исчерпан
-        """
-        key = f"{conversation_id}:{tool_call_id}"
-        history = self.retry_history.get(key, [])
-        return len(history) < self.max_retries
-    
-    def register_attempt(self, conversation_id: str, tool_call_id: str, 
-                        errors: List[Dict], retry_message: Dict) -> int:
-        """
-        Регистрирует попытку retry.
-        
-        Args:
-            conversation_id: ID диалога
-            tool_call_id: ID tool call
-            errors: Список ошибок, вызвавших retry
-            retry_message: Сообщение, отправленное в retry
-            
-        Returns:
-            Номер попытки (1-based)
-        """
-        key = f"{conversation_id}:{tool_call_id}"
-        if key not in self.retry_history:
-            self.retry_history[key] = []
-        
-        attempt_number = len(self.retry_history[key]) + 1
-        
-        self.retry_history[key].append({
-            "attempt": attempt_number,
-            "timestamp": datetime.now().isoformat(),
-            "errors": errors,
-            "retry_message": retry_message
-        })
-        
-        # Логируем попытку
-        log_retry_attempt(
-            conversation_id=conversation_id,
-            tool_call_id=tool_call_id,
-            attempt=attempt_number,
-            errors=errors,
-            retry_message=retry_message
-        )
-        
-        return attempt_number
-    
-    def get_attempts(self, conversation_id: str, tool_call_id: str) -> List[Dict]:
-        """Возвращает историю попыток для конкретного tool call"""
-        key = f"{conversation_id}:{tool_call_id}"
-        return self.retry_history.get(key, [])
-    
-    def get_attempt_count(self, conversation_id: str, tool_call_id: str) -> int:
-        """Возвращает количество сделанных попыток"""
-        return len(self.get_attempts(conversation_id, tool_call_id))
-    
-    def should_abort(self, conversation_id: str, tool_call_id: str) -> bool:
-        """
-        Проверяет, нужно ли прервать выполнение (лимит исчерпан).
-        
-        Returns:
-            True если нужно прервать и отдать как есть
-        """
-        return self.get_attempt_count(conversation_id, tool_call_id) >= self.max_retries
 
 
 class AnswerProcessor:
@@ -115,14 +28,6 @@ class AnswerProcessor:
     Класс для обработки и исправления tool calls от LLM.
     process() ИЗМЕНЯЕТ исходные данные напрямую.
     Свойство changed показывает, были ли изменения.
-    
-    Логика работы с apply_diff:
-    1. СНАЧАЛА исправляем формат (fix_apply_diff) - должен привести к правильному формату
-    2. ПОТОМ валидируем (validate_apply_diff) - обнаруживаем ВСЕ проблемы
-    3. Классифицируем проблемы:
-       - Проблемы с содержимым → RETRY (с notice)
-       - Проблемы с форматированием → баг в fix_apply_diff! Логируем и RETRY
-    4. Максимум 2 попытки retry, после чего отдаем как есть
     """
     
     # Шаблоны сообщений для retry
@@ -284,11 +189,7 @@ class AnswerProcessor:
         self._was_changed = False
         self.changes_log = []
         self._current_test_name = ""  # Для тестов
-        self.workspace_path = None  # Будет установлен извне
         self.progress = {}
-        # Менеджер повторных попыток
-        self.retry_manager = RetryManager(max_retries=2)
-        self.conversation_id = None  # Будет установлен извне
         
         # Загружаем конфигурацию инструментов
         self.tools_config = self._load_tools_config(config_path)
@@ -329,47 +230,17 @@ class AnswerProcessor:
         Returns:
             Dict[str, bool]: Словарь {имя_инструмента: включен/выключен}
         """
-        default_config = {
-            "apply_diff": True,
-            "read_file": True,
-            "ask_followup_question": True,
-            "attempt_completion": True,
-            "codebase_search": True,
-            "execute_command": True,
-            "function_replace": True,
-            "list_files": True,
-            "new_task": True,
-            "read_command_output": True,
-            "search_files": True,
-            "switch_mode": False,
-            "update_todo_list": True,
-            "write_to_file": True,
-            "mcp_context7_resolve_library_id": True,
-            "mcp_context7_query_docs": True,
-            "skill": False
-        }
+
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
         
-        try:
-            if os.path.exists(config_path):
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config = yaml.safe_load(f)
-                
-                tools_config = {}
-                tools = config.get("tools")
-                if tools and isinstance(tools, dict):
-                    for tool_name, tool_enabled in tools.items():
-                        tools_config[tool_name] = bool(tool_enabled)
-                
-                if tools_config:
-                    return tools_config
-                else:
-                    return default_config
-            else:
-                return default_config
-                
-        except Exception as e:
-            logger.error(f"Ошибка загрузки {config_path}: {str(e)}")
-            return default_config
+        tools_config = {}
+        tools = config.get("tools")
+        if tools and isinstance(tools, dict):
+            for tool_name, tool_enabled in tools.items():
+                tools_config[tool_name] = bool(tool_enabled)
+        
+        return tools_config
     
     def _parse_arguments(self, args_str: str, tool_name: str = "unknown", tool_call_id: str = "unknown") -> Dict[str, Any]:
         """Парсит строку аргументов в dict. Выбрасывает ArgumentParseError при ошибке."""
@@ -722,8 +593,8 @@ class AnswerProcessor:
         # Добавляем информацию о попытке
         result["attempt_info"] = {
             "current": attempt_count + 1,
-            "max": self.retry_manager.max_retries,
-            "remaining": self.retry_manager.max_retries - (attempt_count + 1)
+            "max": 2,
+            "remaining": 2 - (attempt_count + 1)
         }
         
         return result
