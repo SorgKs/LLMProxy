@@ -5,15 +5,17 @@ import os
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-# Configure logging
+# Configure ROOT logger for console output at module level
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+    ],
+    force=True
+)
+
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
 
 # Конфигурация логов
 LOG_DIR = "logs"
@@ -32,7 +34,6 @@ def log_info(message: str, **kwargs):
         **kwargs: Дополнительные поля для лога
     """
     entry = {
-        "timestamp": datetime.now().isoformat(),
         "level": "INFO",
         "message": message,
         **kwargs
@@ -51,7 +52,6 @@ def log_debug(message: str, **kwargs):
         **kwargs: Дополнительные поля для лога
     """
     entry = {
-        "timestamp": datetime.now().isoformat(),
         "level": "DEBUG",
         "message": message,
         **kwargs

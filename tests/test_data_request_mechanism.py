@@ -3,10 +3,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pytest
-from proxy import (
+from requests import (
     check_file_sufficiency,
     check_function_sufficiency,
-    Answer
 )
 
 
@@ -17,10 +16,10 @@ def test_check_file_sufficiency_complete():
         "type": "file_content",
         "path": "/tmp/test.py",
         "content": {
-            "1": "# Full file",
-            "2": "def target_func():",
-            "3": "    return 42",
-            "4": ""
+            1: "# Full file",
+            2: "def target_func():",
+            3: "    return 42",
+            4: ""
         },
         "EOF": True,
         "line_count": 4,
@@ -36,7 +35,7 @@ def test_check_file_sufficiency_complete():
         "full_code": "    return 43\n"
     }
     
-    assert check_file_sufficiency(data, pending_info) is True
+    assert check_file_sufficiency(data, pending_info) is not None
 
 
 def test_check_file_sufficiency_incomplete():
@@ -57,7 +56,7 @@ def test_check_file_sufficiency_incomplete():
         "full_code": "    return 43\n"
     }
     
-    assert check_file_sufficiency(data, pending_info) is False
+    assert check_file_sufficiency(data, pending_info) is None
 
 
 def test_check_function_sufficiency_complete():
@@ -67,16 +66,16 @@ def test_check_function_sufficiency_complete():
         "type": "file_content",
         "path": "/tmp/test.py",
         "content": {
-            "1": "# Some module",
-            "2": "",
-            "3": "def helper():",
-            "4": "    pass",
-            "5": "",
-            "6": "def target_func(x, y):",
-            "7": "    return x + y",
-            "8": "",
-            "9": "def other():",
-            "10": "    pass"
+            1: "# Some module",
+            2: "",
+            3: "def helper():",
+            4: "    pass",
+            5: "",
+            6: "def target_func(x, y):",
+            7: "    return x + y",
+            8: "",
+            9: "def other():",
+            10: "    pass"
         },
         "EOF": True,
         "line_count": 10
@@ -88,7 +87,7 @@ def test_check_function_sufficiency_complete():
         "full_code": "    return x * y\n"
     }
     
-    assert check_function_sufficiency(data, pending_info) is True
+    assert check_function_sufficiency(data, "target_func") is not None
 
 
 def test_check_function_sufficiency_incomplete():
@@ -98,10 +97,10 @@ def test_check_function_sufficiency_incomplete():
         "type": "file_content",
         "path": "/tmp/test.py",
         "content": {
-            "1": "# Some module",
-            "2": "",
-            "3": "def helper():",
-            "4": "    pass"
+            1: "# Some module",
+            2: "",
+            3: "def helper():",
+            4: "    pass"
         },
         "EOF": True,
         "line_count": 4
@@ -113,7 +112,7 @@ def test_check_function_sufficiency_incomplete():
         "full_code": "    return x * y\n"
     }
     
-    assert check_function_sufficiency(data, pending_info) is False
+    assert check_function_sufficiency(data, "target_func") is None
 
 
 def test_check_file_sufficiency_no_content():
@@ -131,7 +130,7 @@ def test_check_file_sufficiency_no_content():
         "full_code": "    return 43\n"
     }
     
-    assert check_file_sufficiency(data, pending_info) is False
+    assert check_file_sufficiency(data, pending_info) is None
 
 
 if __name__ == "__main__":

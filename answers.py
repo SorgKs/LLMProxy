@@ -9,7 +9,6 @@ import yaml
 import handlers
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
-from log import log_response
 
 logger = logging.getLogger(__name__)
 
@@ -30,160 +29,6 @@ class AnswerProcessor:
     Свойство changed показывает, были ли изменения.
     """
     
-    # Шаблоны сообщений для retry
-    RETRY_MESSAGES = {
-        # Проблемы с содержимым - понятные пользователю
-        "content": {
-            "content_mismatch": {
-                "title": "❌ Текст для замены не найден",
-                "message": "Указанный фрагмент не найден в файле. Возможно, файл изменился или был указан неправильный контекст.",
-                "advice": "Пожалуйста, прочитайте актуальное содержимое файла и укажите правильный SEARCH блок.",
-                "priority": 1
-            },
-            "file_not_found": {
-                "title": "📁 Файл не найден",
-                "message": "Файл по указанному пути не существует.",
-                "advice": "Проверьте путь к файлу или создайте его отдельной операцией.",
-                "priority": 1
-            },
-            "range_out_of_bounds": {
-                "title": "📏 Некорректный диапазон строк",
-                "message": "Указанный диапазон строк выходит за границы файла.",
-                "advice": "Проверьте актуальный размер файла и скорректируйте номера строк.",
-                "priority": 2
-            },
-            "identical_blocks": {
-                "title": "🔄 Блоки идентичны",
-                "message": "SEARCH и REPLACE блоки完全相同 - изменения не будут применены.",
-                "advice": "Укажите, что именно нужно изменить в REPLACE блоке.",
-                "priority": 2
-            },
-            "file_read_error": {
-                "title": "🔒 Ошибка чтения файла",
-                "message": "Не удалось прочитать файл (проблемы с кодировкой или правами доступа).",
-                "advice": "Проверьте права доступа к файлу и его кодировку.",
-                "priority": 3
-            },
-            "no_workspace": {
-                "title": "⚙️ Техническая ошибка",
-                "message": "Не удалось определить рабочую директорию.",
-                "advice": "Пожалуйста, повторите запрос позже.",
-                "priority": 3,
-                "internal": True
-            }
-        },
-        
-        # Проблемы с форматированием - технические, для разработчиков
-        "formatting": {
-            "missing_search_block": {
-                "title": "⚠️ Ошибка форматирования: отсутствует SEARCH блок",
-                "message": "В diff отсутствует блок с искомым текстом (<<<<<<< SEARCH).",
-                "advice": "Пожалуйста, сгенерируйте diff заново с правильной структурой.",
-                "internal": True
-            },
-            "missing_start_line": {
-                "title": "⚠️ Ошибка форматирования: отсутствует :start_line:",
-                "message": "В SEARCH блоке не указана начальная строка (:start_line:).",
-                "advice": "Укажите номер строки, с которой начинается искомый фрагмент.",
-                "internal": True
-            },
-            "missing_separator": {
-                "title": "⚠️ Ошибка форматирования: отсутствует разделитель",
-                "message": "Между SEARCH и REPLACE блоками отсутствует разделитель =======",
-                "advice": "Пожалуйста, сгенерируйте diff заново с правильной структурой.",
-                "internal": True
-            },
-            "empty_replace": {
-                "title": "⚠️ Ошибка форматирования: пустой REPLACE блок",
-                "message": "Блок для замены (REPLACE) пуст.",
-                "advice": "Укажите новый код для замены или удалите блок, если хотите удалить код.",
-                "internal": True
-            },
-            "wrong_search_marker": {
-                "title": "⚠️ Ошибка форматирования: неправильный маркер поиска",
-                "message": "Использован неправильный маркер начала SEARCH блока.",
-                "advice": "Используйте точный маркер '<<<<<<< SEARCH'.",
-                "internal": True
-            },
-            "wrong_replace_marker": {
-                "title": "⚠️ Ошибка форматирования: неправильный маркер замены",
-                "message": "Использован неправильный маркер конца REPLACE блока.",
-                "advice": "Используйте точный маркер '>>>>>>> REPLACE'.",
-                "internal": True
-            },
-            "wrong_separator": {
-                "title": "⚠️ Ошибка форматирования: неправильный разделитель",
-                "message": "Использован неправильный разделитель между блоками.",
-                "advice": "Используйте точный разделитель '======='.",
-                "internal": True
-            },
-            "duplicate_separators": {
-                "title": "⚠️ Ошибка форматирования: дублирующиеся разделители",
-                "message": "Обнаружены несколько разделителей подряд.",
-                "advice": "Оставьте только один разделитель ======= между блоками.",
-                "internal": True
-            },
-            "malformed_start_line": {
-                "title": "⚠️ Ошибка форматирования: неправильный формат :start_line:",
-                "message": "Директива :start_line: имеет неправильный формат.",
-                "advice": "Используйте точный формат ':start_line:N', где N - номер строки.",
-                "internal": True
-            },
-            "malformed_end_line": {
-                "title": "⚠️ Ошибка форматирования: неправильный формат :end_line:",
-                "message": "Директива :end_line: имеет неправильный формат.",
-                "advice": "Используйте точный формат ':end_line:N', где N - номер строки.",
-                "internal": True
-            },
-            "invalid_json": {
-                "title": "⚠️ Ошибка форматирования: невалидный JSON",
-                "message": "Аргументы tool call не являются валидным JSON.",
-                "advice": "Проверьте синтаксис JSON в аргументах.",
-                "internal": True
-            },
-            "invalid_arguments": {
-                "title": "⚠️ Ошибка форматирования: неверный формат аргументов",
-                "message": "Аргументы tool call должны быть объектом.",
-                "advice": "Передавайте аргументы как JSON объект.",
-                "internal": True
-            },
-            "missing_path": {
-                "title": "⚠️ Ошибка форматирования: отсутствует путь к файлу",
-                "message": "Не указан обязательный параметр 'path'.",
-                "advice": "Укажите путь к файлу, который нужно изменить.",
-                "internal": True
-            },
-            "missing_diff": {
-                "title": "⚠️ Ошибка форматирования: отсутствует diff",
-                "message": "Не указан обязательный параметр 'diff'.",
-                "advice": "Предоставьте diff с изменениями.",
-                "internal": True
-            }
-        },
-        
-        # Комбинированные сообщения для множественных ошибок
-        "combined": {
-            "multiple_content_issues": {
-                "title": "❌ Обнаружено несколько проблем с содержимым",
-                "message": "Найдено {count} проблем, требующих исправления.",
-                "advice": "Пожалуйста, проверьте файл и скорректируйте запрос.",
-                "priority": 1
-            },
-            "multiple_formatting_issues": {
-                "title": "⚠️ Обнаружено несколько ошибок форматирования",
-                "message": "Найдено {count} ошибок в структуре diff.",
-                "advice": "Пожалуйста, сгенерируйте diff заново с правильным форматом.",
-                "internal": True
-            },
-            "mixed_issues": {
-                "title": "❌ Проблемы с содержимым и форматированием",
-                "message": "Найдено {content_count} проблем с содержимым и {formatting_count} ошибок форматирования.",
-                "advice": "Сначала исправьте содержимое, затем проверьте формат.",
-                "priority": 1
-            }
-        }
-    }
-    
     def __init__(self, config_path: str = "config/tools.yaml"):
         """Инициализация процессора"""
         self._was_changed = False
@@ -193,6 +38,9 @@ class AnswerProcessor:
         
         # Загружаем конфигурацию инструментов
         self.tools_config = self._load_tools_config(config_path)
+        
+        # Загружаем шаблоны сообщений для retry
+        self.retry_messages = self._load_retry_messages()
         
         # Сигнатуры для поиска маркеров
         self.source_signatures = [
@@ -214,6 +62,18 @@ class AnswerProcessor:
             r'^-{3,}$',
             r'^>{3,}$',
         ]
+    
+    def _load_retry_messages(self) -> Dict:
+        """
+        Загружает шаблоны сообщений для retry из config/retry_messages.yaml
+        
+        Returns:
+            Dict с шаблонами сообщений
+        """
+        config_path = "config/retry_messages.yaml"
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+            return config if isinstance(config, dict) else {}
     
     @property
     def changed(self) -> bool:
@@ -340,8 +200,8 @@ class AnswerProcessor:
         return {"path": path, "diff": '\n'.join(diff_lines)}
 
     def validate_tool_calls_exist(
-        self, 
-        tool_calls: List[Dict], 
+        self,
+        tool_calls: List[Dict],
         available_tools: List[str]
     ) -> Tuple[bool, List[Dict]]:
         """
@@ -354,21 +214,9 @@ class AnswerProcessor:
             tool_name = tc.get("function", {}).get("name", "")
             tool_call_id = tc.get("id", "unknown")
             
-            # Получаем конфигурацию для инструмента
-            tool_config = self.tools_config.get(tool_name, True)
-            
-            # Проверяем существование с учетом множественных определений
-            exists = False
-            
-            if isinstance(tool_config, list):
-                # Если это список - инструмент существует (множественные определения)
-                # read_file: [false, true] -> exists = True
-                exists = True
-            else:
-                exists = bool(tool_config)
-            
             # Проверяем, есть ли инструмент в available_tools
             if tool_name not in available_tools:
+                tool_config = self.tools_config.get(tool_name, True)
                 invalid.append({
                     "tool_call": tc,
                     "tool_name": tool_name,
@@ -393,6 +241,7 @@ class AnswerProcessor:
         """Сброс состояния"""
         self._was_changed = False
         self.changes_log = []
+        self.progress = {}
 
     def _decode_unicode_escapes(self, text: str) -> str:
         """
@@ -459,7 +308,7 @@ class AnswerProcessor:
         
         for issue in content_issues:
             issue_type = issue["type"]
-            template = self.RETRY_MESSAGES["content"].get(issue_type, {
+            template = self.retry_messages["content"].get(issue_type, {
                 "title": "❌ Неизвестная ошибка",
                 "message": issue["message"],
                 "advice": "Пожалуйста, проверьте запрос и повторите.",
@@ -473,7 +322,7 @@ class AnswerProcessor:
         
         for issue in formatting_issues:
             issue_type = issue["type"]
-            template = self.RETRY_MESSAGES["formatting"].get(issue_type, {
+            template = self.retry_messages["formatting"].get(issue_type, {
                 "title": "⚠️ Неизвестная ошибка форматирования",
                 "message": issue["message"],
                 "advice": "Пожалуйста, проверьте формат diff.",
@@ -493,7 +342,7 @@ class AnswerProcessor:
         if len(content_issues) == 1 and not formatting_issues:
             # Одна content ошибка
             issue = content_issues[0]
-            template = self.RETRY_MESSAGES["content"][issue["type"]]
+            template = self.retry_messages["content"][issue["type"]]
             result = {
                 "type": "retry_notice",
                 "title": template["title"],
@@ -507,7 +356,7 @@ class AnswerProcessor:
         elif len(formatting_issues) == 1 and not content_issues:
             # Одна formatting ошибка
             issue = formatting_issues[0]
-            template = self.RETRY_MESSAGES["formatting"][issue["type"]]
+            template = self.retry_messages["formatting"][issue["type"]]
             result = {
                 "type": "retry_notice",
                 "title": template["title"],
@@ -520,7 +369,7 @@ class AnswerProcessor:
         
         elif content_issues and not formatting_issues:
             # Только content ошибки, несколько
-            template = self.RETRY_MESSAGES["combined"]["multiple_content_issues"]
+            template = self.retry_messages["combined"]["multiple_content_issues"]
             details = []
             for issue in content_issues[:3]:  # Показываем первые 3
                 details.append(f"• {issue['message']}")
@@ -539,7 +388,7 @@ class AnswerProcessor:
         
         elif formatting_issues and not content_issues:
             # Только formatting ошибки, несколько
-            template = self.RETRY_MESSAGES["combined"]["multiple_formatting_issues"]
+            template = self.retry_messages["combined"]["multiple_formatting_issues"]
             details = []
             for issue in formatting_issues[:3]:
                 details.append(f"• {issue['message']}")
@@ -558,7 +407,7 @@ class AnswerProcessor:
         
         else:
             # Смешанные ошибки
-            template = self.RETRY_MESSAGES["combined"]["mixed_issues"]
+            template = self.retry_messages["combined"]["mixed_issues"]
             details = []
             
             # Добавляем content issues
@@ -779,6 +628,97 @@ class AnswerProcessor:
         
         return len(errors) == 0, errors
 
+    def _validate_and_fix_apply_diff(self, parsed_args: Dict, data: Dict) -> Tuple[bool, List[str]]:
+        """
+        Валидирует и исправляет apply_diff на основе реального содержимого файла.
+        Проверяет, совпадает ли SEARCH блок с содержимым файла, и исправляет :start_line: если нужно.
+        
+        Args:
+            parsed_args: Словарь с аргументами tool call (будет модифицирован)
+            data: Данные файла {"type": "file_content", "content": {line_num: content}}
+            
+        Returns:
+            Tuple[bool, List[str]]: (были ли исправления, список сообщений об изменениях)
+        """
+        logger.debug(f"[_validate_and_fix_apply_diff] Вход: data={bool(data)}, parsed_args keys={list(parsed_args.keys())}")
+        changes = []
+        
+        # Проверяем, что data содержит нужные данные
+        if not data or not isinstance(data, dict):
+            logger.debug(f"[_validate_and_fix_apply_diff] Выход: data is None or not dict")
+            return False, changes
+            
+        if data.get("type") != "file_content":
+            logger.debug(f"[_validate_and_fix_apply_diff] Выход: data type is '{data.get('type')}', expected 'file_content'")
+            return False, changes
+            
+        file_content = data.get("content")
+        if not file_content or not isinstance(file_content, dict):
+            logger.debug(f"[_validate_and_fix_apply_diff] Выход: file_content is None or not dict")
+            return False, changes
+        
+        logger.debug(f"[_validate_and_fix_apply_diff] file_content lines count: {len(file_content)}")
+        
+        # Получаем diff из parsed_args
+        diff = parsed_args.get("diff", "")
+        if not diff:
+            logger.debug(f"[_validate_and_fix_apply_diff] Выход: diff is empty")
+            return False, changes
+        
+        logger.debug(f"[_validate_and_fix_apply_diff] diff length: {len(diff)} chars")
+        
+        # Извлекаем содержимое SEARCH блока
+        search_block = self._extract_search_content(diff)
+        if not search_block:
+            logger.debug(f"[_validate_and_fix_apply_diff] Выход: search_block is None")
+            return False, changes
+        
+        logger.debug(f"[_validate_and_fix_apply_diff] search_block extracted, {len(search_block)} chars, {search_block.count(chr(10))+1} lines")
+        
+        # Находим реальную строку начала SEARCH блока в файле
+        actual_start_line = self._find_search_block_line(file_content, search_block)
+        
+        if actual_start_line is None:
+            logger.debug(f"[_validate_and_fix_apply_diff] Выход: search block not found in file")
+            return False, changes
+        
+        logger.debug(f"[_validate_and_fix_apply_diff] found actual_start_line: {actual_start_line}")
+        
+        # Если :start_line: не найден в diff - вставляем после -------
+        start_line_match = re.search(r':start_line:\s*(\d+)', diff)
+        if start_line_match is None:
+            # Находим строку с ------- и вставляем :start_line:N после неё
+            lines = diff.split('\n')
+            new_lines = []
+            for line in lines:
+                new_lines.append(line)
+                if line.strip() == '-------':
+                    new_lines.append(f':start_line:{actual_start_line}')
+                    break
+            
+            # Если ------- не найден, вставляем в конец
+            if len(new_lines) == len(lines):
+                new_lines.append(f':start_line:{actual_start_line}')
+            
+            new_diff = '\n'.join(new_lines)
+            parsed_args["diff"] = new_diff
+            changes.append(f"apply_diff: добавлен :start_line:{actual_start_line}")
+            logger.debug(f"[_validate_and_fix_apply_diff] Выход: добавлен :start_line:{actual_start_line}")
+            return True, changes
+
+        # Если :start_line: уже есть, но отличается от actual_start_line - заменяем
+        declared_start_line = int(start_line_match.group(1))
+        new_diff = re.sub(
+           r':start_line:\s*\d+',
+           f':start_line:{actual_start_line}',
+           diff
+        )
+        parsed_args["diff"] = new_diff
+        changes.append(f"apply_diff: исправлен start_line с {declared_start_line} на {actual_start_line}")
+        logger.debug(f"[_validate_and_fix_apply_diff] Выход: исправлен start_line с {declared_start_line} на {actual_start_line}")
+       
+        return False, changes
+
     def process_single_tool_call(self, tc: dict, index: int, data: dict = None) -> Tuple[bool, List[str]]:
         """Обрабатывает один tool call. Модифицирует tc напрямую если были изменения.
         
@@ -915,12 +855,6 @@ class AnswerProcessor:
             fields=['full_response', 'model', 'duration', 'status_code']
         )
 
-        # Логируем оригинал
-        log_response(
-            duration=answer.duration,
-            status_code=answer.status_code
-        )
-        
         # Сохранение оригинального ответа теперь происходит в proxy.py (save_responce)
         
         # 1. Извлекаем tool calls из текста
@@ -964,31 +898,42 @@ class AnswerProcessor:
                         'tool_call_id': tc['id']
                     }
                 
+                # Initialize variables before the conditional block
+                changed = False
+                changes = []
+                
                 if self.progress[tc['id']] == "current":
                     
                     if (tool_name == "function_replace"):
-                        func_path = tc_copy['function']['arguments']['path']
-                        func_name = tc_copy['function']['arguments']['function']
-                        if data and data.get("type") == "function_content" and data.get("path") == func_path:
-                            changed, changes = self.process_single_tool_call(tc_copy, i, data)
-                            self.progress[tc['id']] = "completed"
-                        else:
-                            return {
-                                'action': 'request_function',
-                                'path': func_path,
-                                'function_name': func_name
-                            }
+                         logger.debug(f"[DEBUG process] Ветка if: tool_name == function_replace")
+                         func_path = tc_copy['function']['arguments']['path']
+                         func_name = tc_copy['function']['arguments']['function']
+                         logger.info(f"[request_function] Формируем запрос функции: path={func_path}, function_name={func_name}")
+                         if data and data.get("type") == "function_content" and data.get("path") == func_path:
+                             changed, changes = self.process_single_tool_call(tc_copy, i, data)
+                             self.progress[tc['id']] = "completed"
+                         else:
+                             logger.info(f"[request_function] Возврат action: path={func_path}, function_name={func_name}, data={data}")
+                             return {
+                                 'action': 'request_function',
+                                 'path': func_path,
+                                 'function_name': func_name
+                             }
                     elif (tool_name == "apply_diff"):
-                        diff_path = tc_copy['function']['arguments']['path']
-                        if data and data.get("type") == "file_content" and data.get("path") == diff_path:
-                            changed, changes = self.process_single_tool_call(tc_copy, i, data)
-                            self.progress[tc['id']] = "completed"
-                        else:
-                            return {
-                                'action': 'request_file',
-                                'path': diff_path
-                            }
+                         logger.debug(f"[DEBUG process] Ветка elif: tool_name == apply_diff")
+                         diff_path = tc_copy['function']['arguments']['path']
+                         logger.info(f"[request_file] Формируем запрос файла: path={diff_path}")
+                         if data and data.get("type") == "file_content" and data.get("path") == diff_path:
+                             changed, changes = self.process_single_tool_call(tc_copy, i, data)
+                             self.progress[tc['id']] = "completed"
+                         else:
+                             logger.info(f"[request_file] Возврат action: path={diff_path}, data={data}")
+                             return {
+                                 'action': 'request_file',
+                                 'path': diff_path
+                             }
                     else:
+                        logger.debug(f"[DEBUG process] Ветка else: tool_name == {tool_name}, processing")
                         changed, changes = self.process_single_tool_call(tc_copy, i)
                         self.progress[tc['id']] = "completed"
                 
@@ -998,9 +943,9 @@ class AnswerProcessor:
                     
                     self.progress[tc['id']] = "completed"
 
-                #if changed:
-                #    self._was_changed = True
-                #    self.changes_log.extend(changes)
+                if changed:
+                    self._was_changed = True
+                    self.changes_log.extend(changes)
             
             # Обновляем full_response если были изменения
             if self._was_changed:
@@ -1027,12 +972,6 @@ class AnswerProcessor:
                 error_tool_name = error.get('tool_name')
                 error_message = error.get('message')
                 logger.error(f"   - {error_tool_name}: {error_message}")
-        
-        # 6. Логируем результат
-        log_response(
-            duration=answer.duration,
-            status_code=200
-        )
         
         # 7. Выводим статистику
         if self._was_changed:
@@ -1676,41 +1615,41 @@ class AnswerProcessor:
         
         return '\n'.join(result)
 
-def _extract_search_content(self, diff: str) -> Optional[str]:
-    """
-    Извлекает содержимое SEARCH блока из diff.
-    
-    Args:
-        diff: Строка diff для анализа
+    def _extract_search_content(self, diff: str) -> Optional[str]:
+        """
+        Извлекает содержимое SEARCH блока из diff.
         
-    Returns:
-        Содержимое SEARCH блока или None если не найден
-    """
-    if not diff:
+        Args:
+            diff: Строка diff для анализа
+            
+        Returns:
+            Содержимое SEARCH блока или None если не найден
+        """
+        if not diff:
+            return None
+            
+        lines = diff.split('\n')
+        in_search = False
+        search_lines = []
+        
+        for line in lines:
+            if line.strip() == "<<<<<<< SEARCH":
+                in_search = True
+                continue
+            if line.strip() == "=======" and in_search:
+                break
+            if in_search:
+                search_lines.append(line)
+                
+        if search_lines:
+            # Удаляем пустые строки в начале и конце
+            while search_lines and not search_lines[0].strip():
+                search_lines.pop(0)
+            while search_lines and not search_lines[-1].strip():
+                search_lines.pop()
+                
+            return '\n'.join(search_lines)
         return None
-        
-    lines = diff.split('\n')
-    in_search = False
-    search_lines = []
-    
-    for line in lines:
-        if line.strip() == "<<<<<<< SEARCH":
-            in_search = True
-            continue
-        if line.strip() == "=======" and in_search:
-            break
-        if in_search:
-            search_lines.append(line)
-            
-    if search_lines:
-        # Удаляем пустые строки в начале и конце
-        while search_lines and not search_lines[0].strip():
-            search_lines.pop(0)
-        while search_lines and not search_lines[-1].strip():
-            search_lines.pop()
-            
-        return '\n'.join(search_lines)
-    return None
 
     def _find_search_block_line(self, file_content: Dict[int, str], search_block: str) -> Optional[int]:
         """

@@ -930,6 +930,447 @@ class RequestProcessor:
         logger.info("="*80)
 
 
+
+def _extract_data_from_request(
+    pending_info: Dict[str, Any],
+    request_body: Dict[str, Any]
+) -> Optional[Dict[str, Any]]:
+    """
+    Извлекает запрошенные данные (файл или функцию) из тела запроса клиента.
+    
+    Args:
+        pending_info: Информация о том, что ожидается (action, path, function_name)
+        request_body: Тело запроса от клиента
+        
+    Returns:
+        Извлеченные данные (file_content или function_content), если найдены и полные.
+        None, если данных нет или они неполные.
+    """
+    if not pending_info:
+        return None
+    
+    path = pending_info.get("path")
+    if not path:
+        logger.info(f"[DEBUG _extract_data_from_request] Нет path в pending_info")
+        return None
+    
+    action = pending_info.get("action")
+    if not action:
+        logger.info(f"[DEBUG _extract_data_from_request] Нет action в pending_info")
+        return None
+    
+    logger.info(f"[DEBUG _extract_data_from_request] Извлекаем данные для {action}: path={path}")
+    
+    # Извлекаем сырой контент файла из запроса
+    extracted = _extract_file_content_from_request(request_body, path)
+    if extracted is None:
+        logger.info(f"[DEBUG _extract_data_from_request] Не удалось извлечь содержимое файла '{path}'")
+        return None
+    
+    logger.info(f"[DEBUG _extract_data_from_request] Получены сырые данные для файла '{path}'")
+    
+    # В зависимости от действия проверяем полноту данных
+    if action == "request_file":
+        logger.debug(f"[DEBUG _extract_data_from_request] Ветка if: action == 'request_file'")
+        # Для файла: проверяем целостность (непрерывность от 1 до N, EOF)
+        ready_data = check_file_sufficiency(extracted, pending_info)
+        if ready_data:
+            logger.info(f"✓ Файл '{path}' найден и полный")
+            return ready_data
+        else:
+            logger.warning(f"⚠️ Файл '{path}' неполный или отсутствует в запросе")
+            return None
+    
+    elif action == "request_function":
+        logger.debug(f"[DEBUG _extract_data_from_request] Ветка elif: action == 'request_function'")
+        # Для функции: проверяем наличие полного определения
+        function_name = pending_info.get("function_name")
+        if not function_name:
+            logger.info(f"[DEBUG _extract_data_from_request] Нет function_name в pending_info")
+            return None
+        
+        ready_data = check_function_sufficiency(extracted, function_name)
+        if ready_data:
+            logger.info(f"✓ Функция '{function_name}()' в '{path}' найдена и полная")
+            return ready_data
+        else:
+            logger.warning(f"⚠️ Функция '{function_name}()' в '{path}' неполная или отсутствует")
+            return None
+    
+    else:
+        logger.debug(f"[DEBUG _extract_data_from_request] Ветка else: action неизвестен={action}")
+        return None
+
+
+def _extract_file_content_from_request(
+    body: dict,
+    target_path: str
+) -> Optional[Dict[str, Any]]:
+    """
+    Извлекает содержимое файла из read_file tool calls в ЗАПРОСЕ (body).
+    """
+    if not isinstance(body, dict):
+        return None
+    
+    messages = body.get("messages", [])
+    if not isinstance(messages, list):
+        return None
+    
+    # Шаг 1: Собираем все read_file запросы
+    read_file_requests = {}
+    
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        
+        if msg.get("role") != "assistant":
+            continue
+        
+        tool_calls = msg.get("tool_calls", [])
+        if not isinstance(tool_calls, list):
+            continue
+        
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            
+            func = tc.get('function', {})
+            if not isinstance(func, dict):
+                continue
+            
+            if func.get('name') != 'read_file':
+                continue
+            
+            tool_call_id = tc.get('id')
+            if not tool_call_id:
+                continue
+            
+            args = func.get('arguments', {})
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+            
+            if not isinstance(args, dict):
+                continue
+            
+            path = args.get('path')
+            if not path:
+                continue
+            
+            offset = args.get('offset', 1)
+            limit = args.get('limit', 2000)  # ТОЛЬКО ЗДЕСЬ DEFAULT 2000
+            
+            read_file_requests[tool_call_id] = {
+                "path": path,
+                "offset": offset,
+                "limit": limit
+            }
+    
+    # Шаг 2: Собираем ответы в обратном порядке
+    content_dict = {}
+    last_line_num = 0
+    total_lines = None
+    EOF = False
+    
+    for msg in reversed(messages):
+        if not isinstance(msg, dict):
+            continue
+        
+        # Проверка на изменение файла
+        if msg.get("role") == "assistant":
+            tool_calls = msg.get("tool_calls", [])
+            if isinstance(tool_calls, list):
+                for tc in tool_calls:
+                    if not isinstance(tc, dict):
+                        continue
+                    
+                    func = tc.get('function', {})
+                    if not isinstance(func, dict):
+                        continue
+                    
+                    tool_name = func.get('name', '')
+                    if tool_name not in ['apply_diff', 'write_to_file']:
+                        continue
+                    
+                    args = func.get('arguments', {})
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except (json.JSONDecodeError, TypeError):
+                            continue
+                    
+                    if not isinstance(args, dict):
+                        continue
+                    
+                    if args.get('path') == target_path:
+                        break
+        
+        if msg.get("role") != "tool":
+            continue
+        
+        tool_call_id = msg.get("tool_call_id")
+        content = msg.get("content")
+        
+        if not tool_call_id or not content:
+            continue
+        
+        request_info = read_file_requests.get(tool_call_id)
+        if not request_info:
+            continue
+        
+        if request_info["path"] != target_path:
+            continue
+        
+        # Парсим строки
+        lines = content.split('\n')
+        
+        # Первая строка - мета-информация
+        meta_line = lines[0] if lines else ""
+        
+        start_shown = None
+        end_shown = None
+        
+        # line_count будет вычисляться в конце на основе всех собранных данных
+        
+        # Извлекаем показываемый диапазон
+        range_match = re.search(r'Showing lines (\d+)-(\d+)', meta_line, re.IGNORECASE)
+        if range_match:
+            start_shown = int(range_match.group(1))
+            end_shown = int(range_match.group(2))
+            current_offset = start_shown
+            current_limit = end_shown - start_shown + 1
+        
+        # Определяем EOF:
+        # 1. Если есть явный маркер "truncated" - точно не EOF
+        # 2. Если end_shown == total_lines - достигнут конец файла
+        # 3. Если запрошенный limit > полученных строк - значит файл кончился
+        
+        if "File content truncated" not in meta_line:
+            EOF = True
+        
+        # Удаляем мета-строки
+        lines = lines[1:]  # убираем "File: ..."
+        if lines and lines[0].strip().startswith("Status:"):
+            lines = lines[1:]  # убираем "Status: ..."
+        if lines and lines[0].strip().startswith("IMPORTANT:"):
+            lines = lines[1:]  # убираем "IMPORTANT: ..."
+        if lines and lines[0].strip().startswith("To read more:"):
+            lines = lines[1:]  # убираем "To read more: ..."
+            
+        # Убираем пустые строки в начале
+        while lines and not lines[0].strip():
+            lines = lines[1:]
+        
+        for line in lines:
+            if not line.strip():
+                continue
+            
+            # Разбиваем строку по первому символу |
+            parts = line.split('| ', 1)
+            if len(parts) != 2:
+                logger.info(f"[DEBUG _extract_file_content_from_request] Разбиение по | не сработало")
+                logger.info(f"[DEBUG _extract_file_content_from_request] Line ='{line}'")
+            
+            # Левая часть - номер строки
+            try:
+                line_num = int(parts[0].strip())
+            except ValueError:
+                continue
+            
+            # Правая часть - содержимое строки (сохраняем как есть)
+            line_content = parts[1]
+            # Если строка состоит только из пробелов, заменяем на пустую строку
+            if line_content and not line_content.strip():
+                line_content = ''
+            
+            if line_num not in content_dict:
+                content_dict[line_num] = line_content
+                if line_num > last_line_num:
+                    last_line_num = line_num
+    
+    if content_dict:
+        # Вычисляем line_count на основе собранных данных
+        line_count = max(int(k) for k in content_dict.keys()) if content_dict else 0
+        
+        # Сортируем ключи для обеспечения последовательного порядка
+        sorted_content = {k: content_dict[k] for k in sorted(content_dict.keys())}
+        return {
+            'type': 'file_content',
+            'path': target_path,
+            'content': sorted_content,
+            'EOF': EOF,
+            'line_count': line_count
+        }
+    
+    return None
+
+
+def check_file_sufficiency(data: dict, pending_info: dict) -> Optional[dict]:
+    """
+    Проверяет, содержит ли data полное содержимое целевого файла.
+    Возвращает готовый файл для передачи в process(), если данные достаточны.
+
+    Функция проверяет, что data содержит непрерывный и полный контент файла,
+    необходимого для операции function_replace.
+
+    Args:
+        data: Словарь с данными, передаваемый в process() (тип file_content)
+        pending_info: Информация из _process_request о запрошенном файле
+                     (содержит path, function_name, full_code)
+
+    Returns:
+        Словарь с данными файла, если данные полные и непрерывные.
+        None, если данных недостаточно или они неполные.
+    """
+    logger.info(f"[check_file_sufficiency] Проверка данных для path={pending_info.get('path')}")
+    
+    # Проверка наличия data
+    if not data or not isinstance(data, dict):
+        logger.info(f"[check_file_sufficiency] data is None or not dict")
+        return None
+    
+    # Проверка типа
+    if data.get('type') != 'file_content':
+        logger.info(f"[check_file_sufficiency] type mismatch: {data.get('type')}")
+        return None
+    
+    # Проверка совпадения пути
+    data_path = data.get('path')
+    pending_path = pending_info.get('path')
+    if data_path != pending_path:
+        logger.info(f"[check_file_sufficiency] path mismatch: data={data_path}, pending={pending_path}")
+        return None
+    
+    # Проверка контента
+    content = data.get('content')
+    if not content or not isinstance(content, dict):
+        logger.info(f"[check_file_sufficiency] content is None or not dict")
+        return None
+    
+    # Проверка EOF
+    if not data.get('EOF'):
+        logger.info(f"[check_file_sufficiency] EOF is False - file not complete")
+        return None
+    
+    # Проверяем, что нет пропусков в нумерации строк
+    try:
+        line_numbers = sorted([int(k) for k in content.keys()])
+    except (ValueError, TypeError):
+        logger.info(f"[check_file_sufficiency] line_numbers parse error")
+        return None
+    
+    if not line_numbers:
+        logger.info(f"[check_file_sufficiency] line_numbers is empty")
+        return None
+    
+    # Проверяем непрерывность от 1 до N
+    if line_numbers[0] != 1:
+        logger.info(f"[check_file_sufficiency] first line is not 1: {line_numbers[0]}")
+        return None
+    
+    for i in range(1, len(line_numbers)):
+        if line_numbers[i] != line_numbers[i-1] + 1:
+            logger.info(f"[check_file_sufficiency] gap in line numbers at {line_numbers[i-1]} -> {line_numbers[i]}")
+            return None
+
+    # Данные достаточны - возвращаем готовый файл
+    logger.info(f"[check_file_sufficiency] ✓ Файл полный: {len(line_numbers)} строк")
+    return {
+        "type": "file_content",
+        "path": data_path,
+        "content": content,
+        "line_count": len(line_numbers)
+    }
+
+
+def check_function_sufficiency(data: dict, function_name: str) -> Optional[str]:
+    """
+    Проверяет, содержит ли data полное определение требуемой функции.
+    Возвращает тело функции (включая def) если функция найдена и полная.
+    """
+    if not data or not isinstance(data, dict):
+        logger.info(f"[DEBUG check_function_sufficiency] data is None or not dict")
+        return None
+
+    content = data.get('content')
+    if not content:
+        logger.info(f"[DEBUG check_function_sufficiency] No content")
+        return None
+
+    # Поиск строки с определением функции
+    def_pattern = re.compile(rf'^\s*def\s+{re.escape(function_name)}\s*\(')
+    start_line = None
+    
+    line_count = data.get('line_count')
+    logger.info(f"[check_function_sufficiency] Поиск функции '{function_name}' в файле {data.get('path')}, line_count={line_count}")
+    
+    # Определяем тип ключей в content (int или str)
+    sample_key = next(iter(content.keys())) if content else None
+    use_int_keys = isinstance(sample_key, int)
+    logger.info(f"[check_function_sufficiency] use_int_keys={use_int_keys}")
+    
+    for i in range(1, line_count + 1):
+        # Используем правильный тип ключа
+        key = i if use_int_keys else str(i)
+        line_content = content.get(key)
+        
+        if line_content is None:
+            continue
+        
+        if def_pattern.search(line_content):
+            start_line = i
+            logger.info(f"[check_function_sufficiency] Найдена функция на строке {start_line}")
+            break
+    
+    if start_line is None:
+        logger.info(f"[check_function_sufficiency] Функция '{function_name}' не найдена")
+        return None
+    
+    # Определяем базовый отступ
+    key = start_line if use_int_keys else str(start_line)
+    def_line = content[key]
+    base_indent = len(def_line) - len(def_line.lstrip())
+    
+    # Собираем тело функции
+    function_body = {}
+    function_body[start_line] = def_line
+    
+    i = start_line + 1
+    while i <= line_count:
+        line_content = content[i]
+        
+        if line_content is None:
+            break
+        
+        line_indent = len(line_content) - len(line_content.lstrip())
+        
+        # Пустые строки и комментарии - часть тела
+        if not line_content.strip() or line_content.strip().startswith('#'):
+            function_body[i] = line_content
+            i += 1
+            continue
+        
+        # Если встретили строку с отступом <= базового - конец функции
+        if line_indent <= base_indent:
+            return {
+                "type": "function_content",
+                "path": data["path"],
+                "function": function_name,
+                "content": function_body
+            }
+        
+        function_body[i] = line_content
+        i += 1
+    
+    return {
+        "type": "function_content",
+        "path": data["path"],
+        "function": function_name,
+        "content": function_body
+    }
+
 # Для обратной совместимости
 def process_request(body: dict, workspace_path: Optional[str] = None, config_path: str = "request.yaml") -> dict:
     """

@@ -139,13 +139,13 @@ class TestRequestFileCycle(unittest.TestCase):
         log.log_info(f"Проверено {len(self.test_cases)} интеграционных кейсов request_file cycle")
 
     def test_extract_file_content_from_request_in_proxy(self):
-        """Тестирует _extract_file_content_from_request напрямую через proxy."""
-        from proxy import _extract_file_content_from_request
+        """Тестирует _extract_file_content_from_request напрямую через requests."""
+        from requests import _extract_file_content_from_request
 
         body = {
             "messages": [
                 {
-                    "role": "tool",
+                    "role": "assistant",
                     "tool_calls": [
                         {
                             "id": "call_1",
@@ -154,14 +154,17 @@ class TestRequestFileCycle(unittest.TestCase):
                                 "name": "read_file",
                                 "arguments": json.dumps({
                                     "path": "src/main.py",
-                                    "content": "import os\n\ndef hello():\n    print('hello')\n",
-                                    "line_count": 4,
-                                    "EOF": True,
-                                    "offset": 1
+                                    "offset": 1,
+                                    "limit": 2000
                                 })
                             }
                         }
                     ]
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": "File: src/main.py\nStatus: OK\nShowing lines 1-4 of 4\n1| import os\n2| \n3| def hello():\n4|     print('hello')"
                 }
             ]
         }
@@ -173,10 +176,10 @@ class TestRequestFileCycle(unittest.TestCase):
         self.assertEqual(result["path"], "src/main.py")
         self.assertTrue(result["EOF"])
         self.assertEqual(result["line_count"], 4)
-        self.assertEqual(result["content"]["1"], "import os")
-        self.assertEqual(result["content"]["2"], "")
-        self.assertEqual(result["content"]["3"], "def hello():")
-        self.assertEqual(result["content"]["4"], "    print('hello')")
+        self.assertEqual(result["content"][1], "import os")
+        self.assertEqual(result["content"][2], "")
+        self.assertEqual(result["content"][3], "def hello():")
+        self.assertEqual(result["content"][4], "    print('hello')")
 
     async def _test_full_cycle_async(self):
         """

@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from proxy import _extract_file_content_from_request, check_file_sufficiency, check_function_sufficiency
+from requests import _extract_file_content_from_request, check_file_sufficiency, check_function_sufficiency
 
 
 class TestCombinedExtractAndCheck(unittest.TestCase):

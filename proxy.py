@@ -1,30 +1,20 @@
-# proxy.py
-import time
-import json
-import uuid
-import re
-import copy
+# proxy.py - OpenRouter Proxy with Authorization
+# Передаёт запросы и ответы с авторизацией
+
 import logging
-from datetime import datetime
-from typing import Dict, List, Any, Optional
-from dataclasses import dataclass
-from fastapi import FastAPI, Request, Response, HTTPException
-from fastapi.responses import StreamingResponse
-import httpx
+import json
+import copy
 import os
-import atexit
-import traceback
-from answers import AnswerProcessor, ArgumentParseError
-from log import log_response, log_retry_attempt, log_info, log_debug
+import time
+import uuid
+from datetime import datetime
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import HTTPException
+import httpx
+from dotenv import load_dotenv
 
-# Настройка логгера
-logger = logging.getLogger(__name__)
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-
-# Load environment variables
+# Load environment variables from .env file
 try:
     from dotenv import load_dotenv
     load_dotenv()
@@ -32,530 +22,24 @@ except Exception:
     pass
 
 from answers import AnswerProcessor
-from requests import RequestProcessor
+from requests import RequestProcessor, _extract_data_from_request
+from dataclasses import dataclass
+from typing import Dict, Any, List, Optional
 
+# Настройка логгера
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # Вывод в консоль
+        logging.FileHandler('logs/test_proxy.log', mode='a', encoding='utf-8')  # Запись в файл
+    ]
+)
+logger = logging.getLogger("proxy")
 
-app = FastAPI(title="LiteLLM Proxy — Full Response + Tool Calls Logging + Proxying")
-
-# Настройки
-LITELLM_URL = os.getenv("LITELLM_URL", "https://openrouter.ai/api/v1")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-TIMEOUT = httpx.Timeout(180.0, connect=15.0)
-
-class MaxRetriesExceededError(Exception):
-    """Превышено максимальное количество retry при сбоях"""
-    pass
-
-def _log_parse_error(error: ArgumentParseError, answer) -> None:
-    """
-    Логирует ошибку парсинга аргументов tool call.
-    """
-    log_info("Argument parse error",
-              type="argument_parse_error",
-              tool_name=error.tool_name,
-              tool_call_id=error.tool_call_id,
-              error_message=str(error),
-              original_args_preview=error.original_args[:500] if error.original_args else None,
-              model=answer.model,
-              duration=answer.duration,
-              is_stream=answer.is_stream,
-              status_code=answer.status_code,
-              conversation_id=getattr(answer, 'conversation_id', 'unknown'))
-    
-    # ВЫВОД В КОНСОЛЬ (ГЛАВНОЕ)
-    logger.error(f"ОШИБКА ПАРСИНГА АРГУМЕНТОВ | Tool: {error.tool_name} | Tool Call ID: {error.tool_call_id} | Ошибка: {error} | Аргументы: {error.original_args[:200] if error.original_args else 'None'}... | Модель: {answer.model} | Длительность: {answer.duration:.2f}с | Conversation ID: {getattr(answer, 'conversation_id', 'unknown')}")
-
-
-def _log_processing_error(error: Exception, answer, stage: str) -> None:
-    """
-    Логирует ошибку обработки ответа.
-    """
-    log_info("Processing error", type="processing_error", stage=stage,
-              error_type=type(error).__name__, error_message=str(error),
-              traceback=traceback.format_exc() if stage in ["parsing", "validation", "serialization"] else None,
-              model=answer.model, duration=answer.duration,
-              is_stream=answer.is_stream, status_code=answer.status_code,
-              conversation_id=getattr(answer, 'conversation_id', 'unknown'))
-    
-    # ВЫВОД В КОНСОЛЬ (ГЛАВНОЕ)
-    timestamp = datetime.now().isoformat()
-    logger.info(f"\n{'='*60}")
-    logger.error(f"⚠️ ОШИБКА ОБРАБОТКИ [{stage.upper()}]")
-    logger.info(f"{'='*60}")
-    logger.info(f"📅 Время: {timestamp}")
-    logger.error(f"🔥 Тип ошибки: {type(error).__name__}")
-    logger.error(f"📝 Сообщение: {error}")
-    logger.info(f"🤖 Модель: {answer.model}")
-    logger.info(f"⏱️ Длительность: {answer.duration:.2f}с")
-    logger.info(f"💬 Conversation ID: {getattr(answer, 'conversation_id', 'unknown')}")
-    
-    # Показываем traceback для отладки
-    if stage in ["parsing", "validation", "serialization"]:
-        logger.info(f"\n📚 Traceback (для отладки):")
-        traceback.print_exc()
-    
-    logger.info(f"{'='*60}\n")
-
-
-def _log_fatal_error(error: Exception, answer, context: str) -> None:
-    """
-    Логирует фатальную ошибку.
-    """
-    log_info("Fatal error", type="fatal_error", context=context,
-              error_type=type(error).__name__, error_message=str(error),
-              traceback=traceback.format_exc(),
-              answer_info={
-                  "model": answer.model if answer else 'unknown',
-                  "duration": answer.duration if answer else 0,
-                  "status_code": answer.status_code if answer else 500
-              } if answer else None)
-    
-    # ВЫВОД В КОНСОЛЬ (ГЛАВНОЕ)
-    timestamp = datetime.now().isoformat()
-    logger.info(f"\n{'='*60}")
-    logger.error(f"💥 ФАТАЛЬНАЯ ОШИБКА [{context.upper()}]")
-    logger.info(f"{'='*60}")
-    logger.info(f"📅 Время: {timestamp}")
-    logger.error(f"🔥 Тип ошибки: {type(error).__name__}")
-    logger.error(f"📝 Сообщение: {error}")
-    if answer:
-        logger.info(f"🤖 Модель: {answer.model}")
-        logger.info(f"⏱️ Длительность: {answer.duration:.2f}с")
-    logger.info(f"\n📚 Полный traceback:")
-    traceback.print_exc()
-    logger.info(f"{'='*60}\n")
-
-def _extract_data_from_request(
-    pending_info: Dict[str, Any],
-    request_body: Dict[str, Any]
-) -> Optional[Dict[str, Any]]:
-    """
-    Извлекает запрошенные данные (файл или функцию) из тела запроса клиента.
-    
-    Args:
-        pending_info: Информация о том, что ожидается (action, path, function_name)
-        request_body: Тело запроса от клиента
-        
-    Returns:
-        Извлеченные данные (file_content или function_content), если найдены и полные.
-        None, если данных нет или они неполные.
-    """
-    if not pending_info:
-        return None
-    
-    path = pending_info.get("path")
-    if not path:
-        logger.info(f"[DEBUG _extract_data_from_request] Нет path в pending_info")
-        return None
-    
-    action = pending_info.get("action")
-    if not action:
-        logger.info(f"[DEBUG _extract_data_from_request] Нет action в pending_info")
-        return None
-    
-    logger.info(f"[DEBUG _extract_data_from_request] Извлекаем данные для {action}: path={path}")
-    
-    # Извлекаем сырой контент файла из запроса
-    extracted = _extract_file_content_from_request(request_body, path)
-    if extracted is None:
-        logger.info(f"[DEBUG _extract_data_from_request] Не удалось извлечь содержимое файла '{path}'")
-        return None
-    
-    logger.info(f"[DEBUG _extract_data_from_request] Получены сырые данные для файла '{path}'")
-    
-    # В зависимости от действия проверяем полноту данных
-    if action == "request_file":
-        # Для файла: проверяем целостность (непрерывность от 1 до N, EOF)
-        ready_data = check_file_sufficiency(extracted, pending_info)
-        if ready_data:
-            logger.info(f"✓ Файл '{path}' найден и полный")
-            return ready_data
-        else:
-            logger.warning(f"⚠️ Файл '{path}' неполный или отсутствует в запросе")
-            return None
-    
-    elif action == "request_function":
-        # Для функции: проверяем наличие полного определения
-        function_name = pending_info.get("function_name")
-        if not function_name:
-            logger.info(f"[DEBUG _extract_data_from_request] Нет function_name в pending_info")
-            return None
-        
-        ready_data = check_function_sufficiency(extracted, function_name)
-        if ready_data:
-            logger.info(f"✓ Функция '{function_name}()' в '{path}' найдена и полная")
-            return ready_data
-        else:
-            logger.warning(f"⚠️ Функция '{function_name}()' в '{path}' неполная или отсутствует")
-            return None
-    
-    else:
-        logger.info(f"[DEBUG _extract_data_from_request] Неизвестное действие: {action}")
-        return None
-
-def _extract_file_content_from_request(
-    body: dict,
-    target_path: str
-) -> Optional[Dict[str, Any]]:
-    """
-    Извлекает содержимое файла из read_file tool calls в ЗАПРОСЕ (body).
-    """
-    if not isinstance(body, dict):
-        return None
-    
-    messages = body.get("messages", [])
-    if not isinstance(messages, list):
-        return None
-    
-    # Шаг 1: Собираем все read_file запросы
-    read_file_requests = {}
-    
-    for msg in messages:
-        if not isinstance(msg, dict):
-            continue
-        
-        if msg.get("role") != "assistant":
-            continue
-        
-        tool_calls = msg.get("tool_calls", [])
-        if not isinstance(tool_calls, list):
-            continue
-        
-        for tc in tool_calls:
-            if not isinstance(tc, dict):
-                continue
-            
-            func = tc.get('function', {})
-            if not isinstance(func, dict):
-                continue
-            
-            if func.get('name') != 'read_file':
-                continue
-            
-            tool_call_id = tc.get('id')
-            if not tool_call_id:
-                continue
-            
-            args = func.get('arguments', {})
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except (json.JSONDecodeError, TypeError):
-                    continue
-            
-            if not isinstance(args, dict):
-                continue
-            
-            path = args.get('path')
-            if not path:
-                continue
-            
-            offset = args.get('offset', 1)
-            limit = args.get('limit', 2000)  # ТОЛЬКО ЗДЕСЬ DEFAULT 2000
-            
-            read_file_requests[tool_call_id] = {
-                "path": path,
-                "offset": offset,
-                "limit": limit
-            }
-    
-    # Шаг 2: Собираем ответы в обратном порядке
-    content_dict = {}
-    last_line_num = 0
-    total_lines = None
-    EOF = False
-    
-    for msg in reversed(messages):
-        if not isinstance(msg, dict):
-            continue
-        
-        # Проверка на изменение файла
-        if msg.get("role") == "assistant":
-            tool_calls = msg.get("tool_calls", [])
-            if isinstance(tool_calls, list):
-                for tc in tool_calls:
-                    if not isinstance(tc, dict):
-                        continue
-                    
-                    func = tc.get('function', {})
-                    if not isinstance(func, dict):
-                        continue
-                    
-                    tool_name = func.get('name', '')
-                    if tool_name not in ['apply_diff', 'write_to_file']:
-                        continue
-                    
-                    args = func.get('arguments', {})
-                    if isinstance(args, str):
-                        try:
-                            args = json.loads(args)
-                        except (json.JSONDecodeError, TypeError):
-                            continue
-                    
-                    if not isinstance(args, dict):
-                        continue
-                    
-                    if args.get('path') == target_path:
-                        break
-        
-        if msg.get("role") != "tool":
-            continue
-        
-        tool_call_id = msg.get("tool_call_id")
-        content = msg.get("content")
-        
-        if not tool_call_id or not content:
-            continue
-        
-        request_info = read_file_requests.get(tool_call_id)
-        if not request_info:
-            continue
-        
-        if request_info["path"] != target_path:
-            continue
-        
-        # Парсим строки
-        lines = content.split('\n')
-        
-        # Первая строка - мета-информация
-        meta_line = lines[0] if lines else ""
-        
-        start_shown = None
-        end_shown = None
-        
-        # line_count будет вычисляться в конце на основе всех собранных данных
-        
-        # Извлекаем показываемый диапазон
-        range_match = re.search(r'Showing lines (\d+)-(\d+)', meta_line, re.IGNORECASE)
-        if range_match:
-            start_shown = int(range_match.group(1))
-            end_shown = int(range_match.group(2))
-            current_offset = start_shown
-            current_limit = end_shown - start_shown + 1
-        
-        # Определяем EOF:
-        # 1. Если есть явный маркер "truncated" - точно не EOF
-        # 2. Если end_shown == total_lines - достигнут конец файла
-        # 3. Если запрошенный limit > полученных строк - значит файл кончился
-        
-        if "File content truncated" not in meta_line:
-            EOF = True
-        
-        # Удаляем мета-строки
-        lines = lines[1:]  # убираем "File: ..."
-        if lines and lines[0].strip().startswith("Status:"):
-            lines = lines[1:]  # убираем "Status: ..."
-        if lines and lines[0].strip().startswith("IMPORTANT:"):
-            lines = lines[1:]  # убираем "IMPORTANT: ..."
-            
-        # Убираем пустые строки в начале
-        while lines and not lines[0].strip():
-            lines = lines[0:]
-        
-        for line in lines:
-            if not line.strip():
-                continue
-            
-            # Разбиваем строку по первому символу |
-            #print(f"'{line}'")
-            parts = line.split('| ', 1)
-            #print(parts)
-            if len(parts) != 2:
-                logger.info(f"[DEBUG _extract_file_content_from_request] Разбиение по | не сработало")
-                logger.info(f"[DEBUG _extract_file_content_from_request] Line ='{line}'")
-            
-            # Левая часть - номер строки
-            try:
-                line_num = int(parts[0].strip())
-            except ValueError:
-                continue
-            
-            # Правая часть - содержимое строки (сохраняем как есть)
-            line_content = parts[1]
-            # Если строка состоит только из пробелов, заменяем на пустую строку
-            if line_content and not line_content.strip():
-                line_content = ''
-            
-            if line_num not in content_dict:
-                content_dict[line_num] = line_content
-                if line_num > last_line_num:
-                    last_line_num = line_num
-    
-    if content_dict:
-        # Вычисляем line_count на основе собранных данных
-        line_count = max(int(k) for k in content_dict.keys()) if content_dict else 0
-        
-        # Сортируем ключи для обеспечения последовательного порядка
-        sorted_content = {k: content_dict[k] for k in sorted(content_dict.keys())}
-        return {
-            'type': 'file_content',
-            'path': target_path,
-            'content': sorted_content,
-            'EOF': EOF,
-            'line_count': line_count
-        }
-    
-    return None
-
-def check_file_sufficiency(data: dict, pending_info: dict) -> Optional[dict]:
-    """
-    Проверяет, содержит ли data полное содержимое целевого файла.
-    Возвращает готовый файл для передачи в process(), если данные достаточны.
-
-    Функция проверяет, что data содержит непрерывный и полный контент файла,
-    необходимого для операции function_replace.
-
-    Args:
-        data: Словарь с данными, передаваемый в process() (тип file_content)
-        pending_info: Информация из _process_request о запрошенном файле
-                     (содержит path, function_name, full_code)
-
-    Returns:
-        Словарь с данными файла, если данные полные и непрерывные.
-        None, если данных недостаточно или они неполные.
-    """
-    # Проверка наличия data
-    if not data or not isinstance(data, dict):
-        return None
-    
-    # Проверка типа
-    if data.get('type') != 'file_content':
-        return None
-    
-    # Проверка совпадения пути
-    data_path = data.get('path')
-    pending_path = pending_info.get('path')
-    if data_path != pending_path:
-        return None
-    
-    # Проверка контента
-    content = data.get('content')
-    if not content or not isinstance(content, dict):
-        return None
-    
-    # Проверка EOF
-    if not data.get('EOF'):
-        return None
-    
-    # Проверяем, что нет пропусков в нумерации строк
-    try:
-        line_numbers = sorted([int(k) for k in content.keys()])
-    except (ValueError, TypeError):
-        return None
-    
-    if not line_numbers:
-        return None
-    
-    # Проверяем непрерывность от 1 до N
-    if line_numbers[0] != 1:
-        return None
-    
-    for i in range(1, len(line_numbers)):
-        if line_numbers[i] != line_numbers[i-1] + 1:
-            return None
-
-    # Данные достаточны - возвращаем готовый файл
-    return {
-        "type": "file_content",
-        "path": data_path,
-        "content": content,
-        "line_count": len(line_numbers)
-    }
-
-def check_function_sufficiency(data: dict, function_name: str) -> Optional[str]:
-    """
-    Проверяет, содержит ли data полное определение требуемой функции.
-    Возвращает тело функции (включая def) если функция найдена и полная.
-    """
-    #print(f"[DEBUG check_function_sufficiency] data keys: {data.keys() if data else None}")
-    #print(f"[DEBUG check_function_sufficiency] function_name: {function_name}")
-    #print(f"[DEBUG check_function_sufficiency] line_count: {data.get('line_count')}")
-
-    if not data or not isinstance(data, dict):
-        logger.info(f"[DEBUG check_function_sufficiency] data is None or not dict")
-        return None
-
-    content = data.get('content')
-    if not content:
-        logger.info(f"[DEBUG check_function_sufficiency] No content")
-        return None
-
-    # Поиск строки с определением функции
-    def_pattern = re.compile(rf'^\s*def\s+{re.escape(function_name)}\s*\(')
-    start_line = None
-    
-    line_count = data.get('line_count')
-    
-    # Определяем тип ключей в content (int или str)
-    sample_key = next(iter(content.keys())) if content else None
-    use_int_keys = isinstance(sample_key, int)
-    
-    for i in range(1, line_count + 1):
-        # Используем правильный тип ключа
-        key = i if use_int_keys else str(i)
-        line_content = content.get(key)
-        
-        if line_content is None:
-            continue
-        
-        #print(f"[DEBUG check_function_sufficiency] Line {i}: '{line_content[:50]}'")
-        
-        if def_pattern.search(line_content):
-            start_line = i
-            #print(f"[DEBUG proxy] Заголовок функции найден на строке {i}")
-            break
-    
-    if start_line is None:
-        #print(f"[DEBUG proxy] Заголовок функции '{function_name}' не найден")
-        return None
-    #else:
-        #print(f"[DEBUG proxy] Заголовок функции '{function_name}' найден")
-    
-    # Определяем базовый отступ
-    key = start_line if use_int_keys else str(start_line)
-    def_line = content[key]
-    base_indent = len(def_line) - len(def_line.lstrip())
-    
-    # Собираем тело функции
-    function_body = {}
-    function_body[start_line] = def_line
-    
-    i = start_line + 1
-    while i <= line_count:
-        line_content = content[i]
-        
-        if line_content is None:
-            break
-        
-        line_indent = len(line_content) - len(line_content.lstrip())
-        
-        # Пустые строки и комментарии - часть тела
-        if not line_content.strip() or line_content.strip().startswith('#'):
-            function_body[i] = line_content
-            i += 1
-            continue
-        
-        # Если встретили строку с отступом <= базового и не декоратор - конец функции
-        #print(line_content)
-        #print(line_indent)
-        if line_indent <= base_indent:
-            #print(function_body)
-            return {
-                "type": "function_content",
-                "path": data["path"],
-                "function": function_name,
-                "content": function_body
-            }
-        
-        function_body[i] = line_content
-        i += 1
-    return {
-        "type": "function_content",
-        "path": data["path"],
-        "function": function_name,
-        "content": function_body
-    }
-
+# Отключаем логирование httpx и httpcore (HTTP Request/Response сообщения)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # Инициализируем процессоры
 answer_processor = AnswerProcessor()
@@ -564,6 +48,9 @@ request_processor = RequestProcessor()
 # Статическая переменная для хранения ожидающих запросов файлов
 _process_request_pending: Dict[str, Any] = {}
 
+app = FastAPI(title="OpenRouter Proxy")
+
+
 @dataclass
 class Answer:
     """Объект ответа от LLM"""
@@ -571,22 +58,22 @@ class Answer:
     status_code: int
     duration: float
     workspace_path: Optional[str] = None
-    
+
     @property
     def content(self) -> str:
         return self.full_response.get("choices", [{}])[0].get("message", {}).get("content", "")
-    
+
     @content.setter
     def content(self, value: str):
         if "choices" in self.full_response and self.full_response["choices"]:
             if "message" not in self.full_response["choices"][0]:
                 self.full_response["choices"][0]["message"] = {}
             self.full_response["choices"][0]["message"]["content"] = value
-    
+
     @property
     def tool_calls(self) -> list:
         return self.full_response.get("choices", [{}])[0].get("message", {}).get("tool_calls", [])
-    
+
     @tool_calls.setter
     def tool_calls(self, value: list):
         if "choices" in self.full_response and self.full_response["choices"]:
@@ -596,12 +83,18 @@ class Answer:
                 self.full_response["choices"][0]["message"]["tool_calls"] = value
             else:
                 self.full_response["choices"][0]["message"].pop("tool_calls", None)
-    
+
     @property
     def model(self) -> str:
         return self.full_response.get("model", "unknown")
 
-def _get_llm_headers(api_key: str) -> Dict[str, str]:
+# Целевой URL (куда проксировать запросы)
+load_dotenv()
+OPENROUTER_URL = os.getenv("OPENROUTER_URL")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+
+
+def _get_llm_headers(api_key: str) -> dict:
     """
     Формирует заголовки для запроса к LLM.
     
@@ -615,11 +108,12 @@ def _get_llm_headers(api_key: str) -> Dict[str, str]:
         "Content-Type": "application/json",
         "Authorization": f"Bearer {api_key}",
         "HTTP-Referer": "http://localhost:8000",
-        "X-Title": "RooCode Proxy"
+        "X-Title": "LLMProxy"
     }
 
-async def send_to_llm_with_retry(
-    request_body: dict, 
+
+async def send_with_retry(
+    request_body: dict,
     api_key: str,
     max_retries: int = 2
 ) -> Dict:
@@ -634,16 +128,17 @@ async def send_to_llm_with_retry(
     Returns:
         Словарь с ответом или ошибкой
     """
-    last_error = None
     headers = _get_llm_headers(api_key)
+    url = f"{OPENROUTER_URL}/chat/completions"
     
     for attempt in range(max_retries + 1):
+        logger.debug(f"[DEBUG send_with_retry] Начало цикла retry attempt={attempt + 1}/{max_retries + 1}")
         try:
             start_time = time.time()
             
-            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=180.0) as client:
                 resp = await client.post(
-                    f"{LITELLM_URL}/chat/completions",
+                    url,
                     json=request_body,
                     headers=headers,
                 )
@@ -653,6 +148,7 @@ async def send_to_llm_with_retry(
                 
                 if resp.status_code >= 500 and attempt < max_retries:
                     # 5xx ошибка - можно повторить тот же запрос
+                    logger.warning(f"Retry attempt {attempt + 1}/{max_retries} due to 5xx error: {resp.status_code}")
                     continue
                 
                 if resp.status_code >= 400:
@@ -675,12 +171,83 @@ async def send_to_llm_with_retry(
                 }
                 
         except (httpx.TimeoutException, httpx.NetworkError) as e:
-            last_error = e
             if attempt == max_retries:
-                raise MaxRetriesExceededError(f"Max retries exceeded: {e}")
+                return {
+                    "full_response": {"error": f"Max retries exceeded: {str(e)}"},
+                    "duration": 0,
+                    "status_code": 504,
+                    "is_error": True,
+                    "is_stream": False
+                }
+            logger.warning(f"Retry attempt {attempt + 1}/{max_retries} due to network error: {e}")
             continue
     
-    raise MaxRetriesExceededError(f"Max retries exceeded: {last_error}")
+    return {
+        "full_response": {"error": "Unknown error"},
+        "duration": 0,
+        "status_code": 500,
+        "is_error": True,
+        "is_stream": False
+    }
+
+
+def _cleanup_responses_folder() -> None:
+    """Очищает папку responses: хранит только за последние 24 часа, но не более 30 файлов."""
+    try:
+        responses_dir = 'responses'
+        if not os.path.exists(responses_dir):
+            return
+        
+        # Получаем все json файлы
+        files = []
+        for filename in os.listdir(responses_dir):
+            if filename.endswith('.json'):
+                filepath = os.path.join(responses_dir, filename)
+                stat = os.stat(filepath)
+                files.append({
+                    'path': filepath,
+                    'mtime': stat.st_mtime
+                })
+        
+        if not files:
+            return
+        
+        # Сортируем по времени (новейшие первые)
+        files.sort(key=lambda x: x['mtime'], reverse=True)
+        
+        now = datetime.now()
+        cutoff_24h = now.timestamp() - 24 * 60 * 60
+        
+        # Файлы для удаления: старше 24 часов или превышают лимит 30 файлов
+        files_to_delete = []
+        for i, f in enumerate(files):
+            if f['mtime'] < cutoff_24h:
+                files_to_delete.append(f['path'])
+            elif i >= 30:
+                files_to_delete.append(f['path'])
+        
+        for filepath in files_to_delete:
+            os.remove(filepath)
+            
+    except Exception as e:
+        logger.error(f"Ошибка при очистке папки responses: {e}")
+
+
+def save_response(modified: bool, full_response: Dict[str, Any]) -> None:
+    """Сохраняет ответ в файл responses/original_*.json или responses/modified_*.json"""
+    try:
+        os.makedirs('responses', exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        kind = "modified" if modified else "original"
+        filename = f"responses/{kind}_{timestamp}.json"
+        
+        with open(filename, 'w', encoding='utf-8') as f:
+            json.dump(full_response, f, ensure_ascii=False, indent=2)
+        
+        # Очищаем старые файлы после сохранения
+        _cleanup_responses_folder()
+    except Exception as e:
+        logger.info(f"[-] Ошибка при сохранении ответа: {e}")
 
 
 def create_error_response(
@@ -690,7 +257,7 @@ def create_error_response(
     """Создает ответ с ошибкой"""
     error_body = {
         "error": {
-            "message": collected_data.get("error", "Unknown error"),
+            "message": collected_data.get("full_response", {}).get("error", "Unknown error"),
             "type": "api_error",
             "code": collected_data.get("status_code", 500)
         }
@@ -703,75 +270,63 @@ def create_error_response(
     )
 
 
+def _log_fatal_error(error: Exception, answer, context: str) -> None:
+    """
+    Логирует фатальную ошибку.
+    """
+    import traceback
+    logger.error(f"Fatal error in {context}: {type(error).__name__}: {error}")
+    logger.error(traceback.format_exc())
+
+
 @app.get("/v1/models")
 async def list_models():
-    """Эндпоинт для получения списка моделей"""
-    return {
-        "object": "list",
-        "data": [
-            {
-                "id": "openai/gpt-4o",
-                "object": "model",
-                "created": 1677610602,
-                "owned_by": "openai"
-            },
-            {
-                "id": "openai/gpt-4o-mini",
-                "object": "model",
-                "created": 1686935000,
-                "owned_by": "openai"
-            },
-            {
-                "id": "openai/gpt-3.5-turbo",
-                "object": "model",
-                "created": 1677610602,
-                "owned_by": "openai"
-            },
-            {
-                "id": "anthropic/claude-3.5-sonnet",
-                "object": "model",
-                "created": 1698412800,
-                "owned_by": "anthropic"
-            },
-            {
-                "id": "anthropic/claude-3-haiku",
-                "object": "model",
-                "created": 1698412800,
-                "owned_by": "anthropic"
-            },
-            {
-                "id": "google/gemini-pro",
-                "object": "model",
-                "created": 1700000000,
-                "owned_by": "google"
-            },
-            {
-                "id": "google/gemini-flash-1.5",
-                "object": "model",
-                "created": 1700000000,
-                "owned_by": "google"
-            },
-            {
-                "id": "meta-llama/llama-3.1-70b-instruct",
-                "object": "model",
-                "created": 1700000000,
-                "owned_by": "meta"
-            },
-            {
-                "id": "meta-llama/llama-3.1-8b-instruct",
-                "object": "model",
-                "created": 1700000000,
-                "owned_by": "meta"
-            }
-        ]
-    }
+    """Эндпоинт для получения списка моделей от OpenRouter (только бесплатные)"""
+    try:
+        headers = _get_llm_headers(OPENROUTER_API_KEY)
+        url = f"{OPENROUTER_URL}/models"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(url, headers=headers)
+            
+        if resp.status_code != 200:
+            logger.error(f"Failed to fetch models from OpenRouter: {resp.status_code}")
+            return {"object": "list", "data": []}
+            
+        data = resp.json()
+        all_models = data.get("data", [])
+        
+        # Фильтруем только бесплатные модели
+        free_models = []
+        for model in all_models:
+            pricing = model.get("pricing", {})
+            prompt_price = float(pricing.get("prompt", 0) or 0)
+            completion_price = float(pricing.get("completion", 0) or 0)
+            
+            # Бесплатная модель - если оба цены равны 0
+            if prompt_price == 0 and completion_price == 0:
+                free_models.append({
+                    "id": model.get("id"),
+                    "object": "model",
+                    "created": model.get("created", 0),
+                    "owned_by": model.get("owned_by", "unknown"),
+                    "name": model.get("name", ""),
+                    "description": model.get("description", "")
+                })
+        
+        return {
+            "object": "list",
+            "data": free_models
+        }
+    except Exception as e:
+        logger.error(f"Error fetching models from OpenRouter: {e}")
+        return {"object": "list", "data": []}
 
 
 @app.get("/models")
 async def list_models_alt():
     """Альтернативный эндпоинт для совместимости"""
     return await list_models()
-
 
 @app.post("/chat/completions")
 @app.post("/v1/chat/completions")
@@ -793,7 +348,7 @@ async def proxy_chat_completions(request: Request):
         available_tools = [tool.get("function", {}).get("name", "") for tool in modified_body["tools"]]
     
     # 📤 Вывод информации о запросе (метаданные) + файл (полный контент)
-    logger.info(f"{datetime.now().isoformat()} | REQ | size={len(str(body))} | tools={len(available_tools)}")
+    logger.info(f"REQ | size={len(str(body))} | tools={len(available_tools)}")
     
     # Настройки self-correction
     max_corrections = 2
@@ -803,10 +358,13 @@ async def proxy_chat_completions(request: Request):
 
     # Цикл self-correction (отправка НОВЫХ запросов при невалидных tool calls)
     while correction_attempt <= max_corrections:
+        logger.debug(f"[DEBUG proxy_chat_completions] Начало цикла while correction_attempt={correction_attempt}/{max_corrections}")
         pending_data = None
         if _process_request_pending:
-            pending_data = _extract_data_from_request(_process_request_pending,current_body)
+            logger.debug(f"[DEBUG proxy_chat_completions] Ветка if: _process_request_pending существует, path={_process_request_pending.get('path')}")
+            pending_data = _extract_data_from_request(_process_request_pending, current_body)
             if pending_data is None:
+                logger.debug(f"[DEBUG proxy_chat_completions] Ветка if (nested): pending_data is None - возвращаем read_file")
                 read_file_response = {
                             "id": f"chatcmpl-{uuid.uuid4().hex}",
                             "object": "chat.completion",
@@ -847,23 +405,23 @@ async def proxy_chat_completions(request: Request):
                 )
                 break
             else:
+                logger.debug(f"[DEBUG proxy_chat_completions] Ветка else (nested): pending_data найден, используем deep copy original_response")
                 answer = copy.deepcopy(_process_request_pending["original_response"])
+                logger.info(f"REQ | Получены данные для файла: path={pending_data.get('path')}")
+                # Обрабатываем ответ с данными файла (apply_diff, function_replace)
+                process_result = answer_processor.process(answer, data=pending_data)
+                _process_request_pending = None
+                if isinstance(process_result, dict):
+                    action = process_result.get("action")
+                    logger.warning(f"Unexpected action from process(): {action}")
         else:
+            logger.debug(f"[DEBUG proxy_chat_completions] Ветка else: _process_request_pending пуст, отправляем запрос в LLM")
             # Отправка ТЕКУЩЕГО запроса с retry
-            try:
-                collected_data = await send_to_llm_with_retry(
-                    current_body,
-                    OPENROUTER_API_KEY,
-                    max_retries=2
-                )
-            except MaxRetriesExceededError as e:
-                # Сетевые сбои - отдаём ошибку клиенту
-                logger.error(f"❌ LLM request failed after retries: {e}")
-                return Response(
-                    content=json.dumps({"error": f"LLM request failed: {str(e)}"}),
-                    status_code=504,
-                    media_type="application/json"
-                )
+            collected_data = await send_with_retry(
+                current_body,
+                OPENROUTER_API_KEY,
+                max_retries=2
+            )
             
             # Обработка ошибок от LLM
             if collected_data.get("is_error"):
@@ -887,7 +445,7 @@ async def proxy_chat_completions(request: Request):
                     logger.error(f"❌ LLM API error: status={status_code} | {desc}")
                 else:
                     logger.error(f"❌ LLM API error: status={status_code}")
-                return create_error_response(collected_data, is_stream)
+                return create_error_response(collected_data, False)
             
             # Создание Answer объекта
             try:
@@ -905,15 +463,15 @@ async def proxy_chat_completions(request: Request):
                 )
             
             # Логируем оригинальный ответ через log.py (файл) + консоль (метаданные)
-            log_response(
-                duration=answer.duration,
-                status_code=answer.status_code
-            )
+            #log_response(
+            #    duration=answer.duration,
+            #    status_code=answer.status_code
+            #)
             
             # Сохраняем оригинальный ответ в файл немедленно после получения
-            save_responce(modified=False, full_responce=answer.full_response)
+            save_response(modified=False, full_response=answer.full_response)
             tools_list = ",".join([tc.get("function", {}).get("name", "") for tc in answer.tool_calls if "function" in tc])
-            logger.info(f"{datetime.now().isoformat()} | ANS | size={len(str(answer.full_response))} | status={answer.status_code} | {tools_list} | duration={answer.duration:.2f}s")
+            logger.info(f"ANS | size={len(str(answer.full_response))} | status={answer.status_code} | {tools_list} | duration={answer.duration:.2f}s")
         
         # ✅ ОБРАБОТКА ОТВЕТА (исправление форматирования и т.д.)
         process_result = answer_processor.process(answer, data=pending_data)
@@ -925,6 +483,7 @@ async def proxy_chat_completions(request: Request):
             func_name = process_result.get("function_name")
 
             if action in ["request_file","request_function"]:
+                logger.debug(f"[DEBUG proxy_chat_completions] Ветка if: action in [request_file, request_function]")
                 # Нужно отправить read_file клиенту
                 path = process_result.get("path")
                 fn_name = process_result.get("function_name")
@@ -938,6 +497,7 @@ async def proxy_chat_completions(request: Request):
                 }
                 continue
             elif action == "retry_with_llm":
+                logger.debug(f"[DEBUG proxy_chat_completions] Ветка elif: action == retry_with_llm")
                 # Нужно отправить сообщение в LLM для исправления
                 retry_message = process_result.get("message")
                 # Добавляем в историю и продолжаем цикл
@@ -946,6 +506,7 @@ async def proxy_chat_completions(request: Request):
                 continue  # Повторяем запрос к LLM
                 
             else:
+                logger.debug(f"[DEBUG proxy_chat_completions] Ветка else: Unknown action={action}")
                 # Неизвестное действие - логируем и продолжаем
                 logger.warning(f"⚠️ Unknown action: {action}")
 
@@ -956,6 +517,7 @@ async def proxy_chat_completions(request: Request):
         )
         
         if is_valid:
+            logger.debug(f"[DEBUG proxy_chat_completions] Ветка if: is_valid=True - выходим из цикла")
             # Всё хорошо - выходим из цикла
             final_answer = answer
             break
@@ -964,6 +526,7 @@ async def proxy_chat_completions(request: Request):
         correction_attempt += 1
         
         if correction_attempt > max_corrections:
+            logger.debug(f"[DEBUG proxy_chat_completions] Ветка if: correction_attempt > max_corrections - выходим с невалидными tool calls")
             # Лимит исчерпан - отдаём ответ как есть (с невалидными tool calls)
             final_answer = answer
             break
@@ -975,23 +538,23 @@ async def proxy_chat_completions(request: Request):
         )
         
         # Логируем correction запрос через log_modified_request (файл) + консоль (метаданные)
-        logger.info(f"{datetime.now().isoformat()} | correction | attempt={correction_attempt} | invalid_tools={len(invalid_tools)}")
+        logger.info(f"correction | attempt={correction_attempt} | invalid_tools={len(invalid_tools)}")
         
     # Отправка ответа клиенту
     if final_answer is None:
         final_answer = answer
     
     # Логируем финальный ответ (файл) + консоль (метаданные)
-    log_response(
-        duration=final_answer.duration,
-        status_code=final_answer.status_code
-    )
+    #log_response(
+    #    duration=final_answer.duration,
+    #    status_code=final_answer.status_code
+    #)
     
     # Сохраняем модифицированный ответ
-    save_responce(modified=True, full_responce=final_answer.full_response)
+    save_response(modified=True, full_response=final_answer.full_response)
     
     tools_list = ",".join([tc.get("function", {}).get("name", "") for tc in final_answer.tool_calls if "function" in tc])
-    logger.info(f"{datetime.now().isoformat()} | ANS | size={len(str(final_answer.full_response))} | status={final_answer.status_code} | {tools_list} | duration={final_answer.duration:.2f}s")
+    logger.info(f"ANS | size={len(str(final_answer.full_response))} | status={final_answer.status_code} | {tools_list} | duration={final_answer.duration:.2f}s")
     
     return Response(
         content=json.dumps(final_answer.full_response),
@@ -1000,32 +563,14 @@ async def proxy_chat_completions(request: Request):
     )
 
 
-def save_responce(modified: bool, full_responce: Dict[str, Any]) -> None:
-    """Сохраняет ответ в файл responses/original_*.json или responses/modified_*.json"""
-    try:
-        os.makedirs('responses', exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        kind = "modified" if modified else "original"
-        filename = f"responses/{kind}_{timestamp}.json"
-        
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(full_responce, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.info(f"[-] Ошибка при сохранении ответа: {e}")
-
-
 if __name__ == "__main__":
     import uvicorn
     
-    logger.info("=" * 60)
-    logger.info("🚀 OpenRouter Proxy Server")
-    logger.info("=" * 60)
-    logger.info(f"📡 OpenRouter URL: {LITELLM_URL}")
-    logger.info(f"🔑 API Key: {OPENROUTER_API_KEY[:20] if OPENROUTER_API_KEY else 'NOT SET'}...")
-    logger.info(f"🌐 Server: http://0.0.0.0:8000")
-    logger.info("=" * 60)
+    logger.info("=" * 50)
+    logger.info("🚀 OpenRouter Proxy")
+    logger.info(f"Target: {OPENROUTER_URL}")
+    logger.info("=" * 50)
     
-    # Запуск сервера
     uvicorn.run(
         "proxy:app",
         host="0.0.0.0",

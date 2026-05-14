@@ -74,7 +74,7 @@ class TestExtractFileContentFromRequest(unittest.TestCase):
 
     def test_extract_with_read_file(self):
         """Проверяет извлечение контента из read_file вызовов"""
-        from proxy import _extract_file_content_from_request
+        from requests import _extract_file_content_from_request
 
         body = {
             "messages": [
@@ -82,17 +82,23 @@ class TestExtractFileContentFromRequest(unittest.TestCase):
                     "role": "assistant",
                     "tool_calls": [
                         {
+                            "id": "call_123",
                             "function": {
                                 "name": "read_file",
                                 "arguments": json.dumps({"path": "test.py", "content": "line1\nline2"}),
                             }
                         }
                     ]
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_123",
+                    "content": "File: test.py\nStatus: OK\nShowing lines 1-2 of 2\n1| line1\n2| line2"
                 }
             ]
         }
 
-        result = _extract_file_content_from_request(body)
+        result = _extract_file_content_from_request(body, "test.py")
         self.assertIsInstance(result, dict)
         self.assertEqual(result["type"], "file_content")
         self.assertEqual(result["path"], "test.py")
@@ -101,11 +107,11 @@ class TestExtractFileContentFromRequest(unittest.TestCase):
 
     def test_extract_no_tool_calls(self):
         """Проверяет извлечение при отсутствии tool_calls"""
-        from proxy import _extract_file_content_from_request
+        from requests import _extract_file_content_from_request
 
         body = {"messages": []}
 
-        result = _extract_file_content_from_request(body)
+        result = _extract_file_content_from_request(body, "test.py")
         self.assertIsNone(result)
 
         log.log_info("test_extract_no_tool_calls passed!")
@@ -116,12 +122,12 @@ class TestCheckFileSufficiency(unittest.TestCase):
 
     def test_sufficient_data(self):
         """Проверяет достаточные данные"""
-        from proxy import check_file_sufficiency
+        from requests import check_file_sufficiency
 
         data = {
             "type": "file_content",
             "path": "test.py",
-            "content": {"1": "line1", "2": "line2"},
+            "content": {1: "line1", 2: "line2"},
             "EOF": True,
         }
         pending_info = {
@@ -131,17 +137,18 @@ class TestCheckFileSufficiency(unittest.TestCase):
         }
 
         result = check_file_sufficiency(data, pending_info)
-        self.assertTrue(result)
+        self.assertIsNotNone(result)
 
         log.log_info("test_sufficient_data passed!")
 
     def test_insufficient_data_no_eof(self):
         """Проверяет недостаточные данные (нет EOF)"""
-        from proxy import check_file_sufficiency
+        from requests import check_file_sufficiency
 
         data = {
             "type": "file_content",
-            "content": {"1": "line1"},
+            "path": "test.py",
+            "content": {1: "line1"},
             "EOF": False,
         }
         pending_info = {
@@ -151,17 +158,17 @@ class TestCheckFileSufficiency(unittest.TestCase):
         }
 
         result = check_file_sufficiency(data, pending_info)
-        self.assertFalse(result)
+        self.assertIsNone(result)
 
         log.log_info("test_insufficient_data_no_eof passed!")
 
 
 class TestSaveResponse(unittest.TestCase):
-    """Тесты для функции save_responce"""
+    """Тесты для функции save_response"""
 
     def test_save_response_creates_file(self):
         """Проверяет создание файла ответа"""
-        from proxy import save_responce
+        from proxy import save_response
 
         test_response = {
             "id": "test-123",
@@ -171,13 +178,13 @@ class TestSaveResponse(unittest.TestCase):
         # Мокаем open, чтобы не создавать реальные файлы
         with patch("builtins.open", MagicMock()) as mock_open:
             with patch("os.makedirs"):
-                save_responce(False, test_response)
+                save_response(False, test_response)
 
         log.log_info("test_save_response_creates_file passed!")
 
     def test_save_modified_response(self):
         """Проверяет сохранение модифицированного ответа"""
-        from proxy import save_responce
+        from proxy import save_response
 
         test_response = {
             "id": "test-456",
@@ -186,9 +193,36 @@ class TestSaveResponse(unittest.TestCase):
 
         with patch("builtins.open", MagicMock()):
             with patch("os.makedirs"):
-                save_responce(True, test_response)
+                save_response(True, test_response)
 
         log.log_info("test_save_modified_response passed!")
+
+    def test_cleanup_responses_folder(self):
+        """Проверяет очистку папки responses"""
+        from proxy import _cleanup_responses_folder
+        import shutil
+
+        # Создаем временную папку с тестовыми файлами
+        responses_dir = 'responses'
+        os.makedirs(responses_dir, exist_ok=True)
+
+        # Создаем несколько тестовых файлов (больше 30, чтобы проверить лимит)
+        for i in range(35):
+            filename = f"responses/test_{i}.json"
+            with open(filename, 'w') as f:
+                json.dump({"index": i}, f)
+
+        # Запускаем очистку
+        _cleanup_responses_folder()
+
+        # Проверяем, что файлов не больше 30
+        files = [f for f in os.listdir(responses_dir) if f.endswith('.json')]
+        self.assertLessEqual(len(files), 30)
+
+        # Очищаем
+        shutil.rmtree(responses_dir, ignore_errors=True)
+
+        log.log_info("test_cleanup_responses_folder passed!")
 
 
 class TestCreateErrorResponse(unittest.TestCase):
