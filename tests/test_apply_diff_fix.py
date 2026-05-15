@@ -1,5 +1,4 @@
 # tests/test_apply_diff_fix.py
-import log
 import json
 import os
 import sys
@@ -128,46 +127,38 @@ class TestApplyDiffFix:
             print(f"{BOLD}ТЕСТ #{i}: {test_case.get('name', 'Без имени')}{RESET}")
             print(f"{BOLD}{'='*60}{RESET}")
             
+            # === ТЕСТ БЕЗ DATA ===
+            print(f"\n{BLUE}  --- Тест без data (сохранение оригинального start_line) ---{RESET}")
             try:
-                # Создаем копию аргументов
                 args = {
                     "path": "test.py",
                     "diff": test_case["input"]["diff"]
                 }
                 
-                # Запускаем исправление
                 was_changed = self.processor.fix_apply_diff(args, debug=False)
                 
-                # Получаем исправленный diff
                 actual_diff = args["diff"]
                 expected_diff = test_case["expected"]["diff"]
                 
-                # Нормализуем для сравнения
                 normalized_actual = self.normalize_diff(actual_diff)
                 normalized_expected = self.normalize_diff(expected_diff)
                 
-                # Проверяем валидность формата
                 validation = self.validate_roo_format(actual_diff)
                 
-                # Сравниваем с ожидаемым результатом
                 if normalized_actual == normalized_expected and validation["valid"]:
-                    print(f"{GREEN}  ✅ ПРОЙДЕН{RESET}")
-                    passed += 1
+                    print(f"{GREEN}  ✅ БЕЗ DATA: ПРОЙДЕН{RESET}")
                 else:
-                    print(f"{RED}  ❌ НЕ ПРОЙДЕН{RESET}")
+                    print(f"{RED}  ❌ БЕЗ DATA: НЕ ПРОЙДЕН{RESET}")
                     failed += 1
                     
-                    # Выводим ошибки валидации
                     if not validation["valid"]:
                         print(f"{RED}     Ошибки формата:{RESET}")
                         for error in validation["errors"]:
                             print(f"{RED}       • {error}{RESET}")
                     
-                    # Показываем различия
                     if normalized_actual != normalized_expected:
                         print(f"{YELLOW}     Результат не соответствует ожидаемому{RESET}")
                         
-                        # Запускаем с debug для отладки
                         debug_args = {
                             "path": "test.py",
                             "diff": test_case["input"]["diff"]
@@ -180,7 +171,6 @@ class TestApplyDiffFix:
                         if len(actual_lines) != len(expected_lines):
                             print(f"{YELLOW}       Разное количество строк: actual={len(actual_lines)}, expected={len(expected_lines)}{RESET}")
                         
-                        # Показываем первые несколько отличающихся строк
                         diff_count = 0
                         for line_idx, (a, e) in enumerate(zip(actual_lines, expected_lines)):
                             if a != e and diff_count < 3:
@@ -191,20 +181,83 @@ class TestApplyDiffFix:
                                 if diff_count >= 3:
                                     print(f"{YELLOW}         ... (остальные различия скрыты){RESET}")
                                     break
-                
             except Exception as e:
-                print(f"{RED}  ❌ ОШИБКА: {str(e)}{RESET}")
+                print(f"{RED}  ❌ БЕЗ DATA: ОШИБКА: {str(e)}{RESET}")
                 failed += 1
+            
+            # === ТЕСТ С DATA ===
+            if "data" in test_case and "expected3" in test_case:
+                print(f"\n{BLUE}  --- Тест с data (поиск актуального start_line) ---{RESET}")
+                try:
+                    args = {
+                        "path": "test.py",
+                        "diff": test_case["input"]["diff"]
+                    }
+                    
+                    data = test_case["data"]
+                    
+                    # Сначала исправляем формат
+                    self.processor.fix_apply_diff(args, debug=False)
+                    
+                    # Затем проверяем и исправляем start_line на основе данных файла
+                    if data and data.get("type") == "file_content":
+                        self.processor._validate_and_fix_apply_diff(args, data)
+                    
+                    actual_diff = args["diff"]
+                    expected_diff = test_case["expected3"]["diff"]
+                    
+                    normalized_actual = self.normalize_diff(actual_diff)
+                    normalized_expected = self.normalize_diff(expected_diff)
+                    
+                    validation = self.validate_roo_format(actual_diff)
+                    
+                    if normalized_actual == normalized_expected and validation["valid"]:
+                        print(f"{GREEN}  ✅ С DATA: ПРОЙДЕН{RESET}")
+                        passed += 1
+                    else:
+                        print(f"{RED}  ❌ С DATA: НЕ ПРОЙДЕН{RESET}")
+                        failed += 1
+                        
+                        if not validation["valid"]:
+                            print(f"{RED}     Ошибки формата:{RESET}")
+                            for error in validation["errors"]:
+                                print(f"{RED}       • {error}{RESET}")
+                        
+                        if normalized_actual != normalized_expected:
+                            print(f"{YELLOW}     Результат не соответствует ожидаемому{RESET}")
+                            
+                            actual_lines = normalized_actual.split('\n')
+                            expected_lines = normalized_expected.split('\n')
+                            
+                            if len(actual_lines) != len(expected_lines):
+                                print(f"{YELLOW}       Разное количество строк: actual={len(actual_lines)}, expected={len(expected_lines)}{RESET}")
+                            
+                            diff_count = 0
+                            for line_idx, (a, e) in enumerate(zip(actual_lines, expected_lines)):
+                                if a != e and diff_count < 3:
+                                    print(f"{YELLOW}       Строка {line_idx+1} отличается:{RESET}")
+                                    print(f"{YELLOW}         actual:   '{a}'{RESET}")
+                                    print(f"{YELLOW}         expected: '{e}'{RESET}")
+                                    diff_count += 1
+                                    if diff_count >= 3:
+                                        print(f"{YELLOW}         ... (остальные различия скрыты){RESET}")
+                                        break
+                except Exception as e:
+                    print(f"{RED}  ❌ С DATA: ОШИБКА: {str(e)}{RESET}")
+                    failed += 1
+            else:
+                # Если нет data/expected3, считаем что тест без data прошел
+                passed += 1
         
         # Выводим итоговую статистику
         print(f"\n{BOLD}{'='*80}{RESET}")
         print(f"{BOLD}ИТОГИ ТЕСТИРОВАНИЯ{RESET}")
         print(f"{BOLD}{'='*80}{RESET}")
-        print(f"Всего тестов: {len(test_cases)}")
+        print(f"Всего тестов: {len(test_cases) * 2}")
         print(f"{GREEN}✅ Пройдено: {passed}{RESET}")
         print(f"{RED}❌ Не пройдено: {failed}{RESET}")
         
-        success_rate = round(passed / max(len(test_cases), 1) * 100, 2)
+        success_rate = round(passed / max(len(test_cases) * 2, 1) * 100, 2)
         if success_rate >= 80:
             color = GREEN
         elif success_rate >= 50:

@@ -1,0 +1,10 @@
+{
+  "type": "file_content",
+  "path": "test.py",
+  "content": {
+    "1": "def foo():",
+    "2": "    pass",
+    "3": "x = 1",
+    "4": "y = 2"
+  }
+}

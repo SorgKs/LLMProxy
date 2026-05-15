@@ -1,0 +1,185 @@
+[
+  {
+    "name": "Формат с [SEARCH] и [REPLACE] (из первого лога)",
+    "input": {
+      "diff": "=======\n[SEARCH]\n:start_line:462\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n[=======]\n[REPLACE]\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции\n>>>>>> REPLACE"
+    },
+    "expected": {
+      "diff": "<<<<<<< SEARCH\n:start_line:462\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n=======\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции\n>>>>>>> REPLACE"
+    },
+    "data": {
+      "type": "file_content",
+      "path": "test.py",
+      "content": {
+        "1": "            # Оптимизируем описания инструментов:",
+        "2": "            # - Удаляет все описания параметров",
+        "3": "            # - Удаляет indentation полностью",
+        "4": "            # - Удаляет mode полностью",
+        "5": "            # - Оставляет только path в required",
+        "6": "            # - Упрощает description функции"
+      }
+    },
+    "expected3": {
+      "diff": "<<<<<<< SEARCH\n:start_line:1\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n=======\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции\n>>>>>>> REPLACE"
+    }
+  },
+  {
+    "name": "Формат с SEARCH и REPLACE без скобок (из второго лога)",
+    "input": {
+      "diff": "=======\nSEARCH\n:start_line:464\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n            =======\nREPLACE\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции\n            >>>>>>> REPLACE"
+    },
+    "expected": {
+      "diff": "<<<<<<< SEARCH\n:start_line:464\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n=======\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции\n>>>>>>> REPLACE"
+    },
+    "data": {
+      "type": "file_content",
+      "path": "test.py",
+      "content": {
+        "1": "            # Оптимизируем описания инструментов:",
+        "2": "            # - Удаляет все описания параметров",
+        "3": "            # - Удаляет indentation полностью",
+        "4": "            # - Удаляет mode полностью",
+        "5": "            # - Оставляет только path в required",
+        "6": "            # - Упрощает description функции"
+      }
+    },
+    "expected3": {
+      "diff": "<<<<<<< SEARCH\n:start_line:1\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n=======\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции\n>>>>>>> REPLACE"
+    }
+  },
+  {
+    "name": "Формат с [SEARCH] и :end_line:",
+    "input": {
+      "diff": "=======\n[SEARCH]\n:start_line:462\n:end_line:470\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n[REPLACE]\n            # Оптимизируем опесания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции\n>>>>>> REPLACE"
+    },
+    "expected": {
+      "diff": "<<<<<<< SEARCH\n:start_line:462\n:end_line:470\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n=======\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции\n>>>>>>> REPLACE"
+    },
+    "data": {
+      "type": "file_content",
+      "path": "test.py",
+      "content": {
+        "1": "            # Оптимизируем описания инструментов:",
+        "2": "            # - Удаляет все описания параметров",
+        "3": "            # - Удаляет indentation полностью",
+        "4": "            # - Удаляет mode полностью",
+        "5": "            # - Оставляет только path в required",
+        "6": "            # - Упрощает description функции"
+      }
+    },
+    "expected3": {
+      "diff": "<<<<<<< SEARCH\n:start_line:1\n:end_line:470\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n=======\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции\n>>>>>>> REPLACE"
+    }
+  },
+  {
+    "name": "Формат с лишними пробелами в начале строк",
+    "input": {
+      "diff": "    [SEARCH]\n    :start_line:462\n    -------\n                # Оптимизируем описания инструментов:\n                # - Удаляет все описания параметров\n                # - Удаляет indentation полностью\n                # - Удаляет mode полностью\n                # - Оставляет только path в required\n                # - Упрощает description функции\n    [REPLACE]\n                # Оптимизируем описания инструментов:\n                # - Удаляет все описания параметров\n                # - Удаляет indentation полностью\n                # - Удаляет mode полностью для всех режимов кроме orchestartor\n                # - Оставляет только path в required\n                # - Упрощает description функции"
+    },
+    "expected": {
+      "diff": "<<<<<<< SEARCH\n:start_line:462\n-------\n                # Оптимизируем описания инструментов:\n                # - Удаляет все описания параметров\n                # - Удаляет indentation полностью\n                # - Удаляет mode полностью\n                # - Оставляет только path в required\n                # - Упрощает description функции\n=======\n                # Оптимизируем описания инструментов:\n                # - Удаляет все описания параметров\n                # - Удаляет indentation полностью\n                # - Удаляет mode полностью для всех режимов кроме orchestartor\n                # - Оставляет только path в required\n                # - Упрощает description функции\n>>>>>>> REPLACE"
+    },
+    "data": {
+      "type": "file_content",
+      "path": "test.py",
+      "content": {
+        "1": "                # Оптимизируем описания инструментов:",
+        "2": "                # - Удаляет все описания параметров",
+        "3": "                # - Удаляет indentation полностью",
+        "4": "                # - Удаляет mode полностью",
+        "5": "                # - Оставляет только path в required",
+        "6": "                # - Упрощает description функции"
+      }
+    },
+    "expected3": {
+      "diff": "<<<<<<< SEARCH\n:start_line:1\n-------\n                # Оптимизируем описания инструментов:\n                # - Удаляет все описания параметров\n                # - Удаляет indentation полностью\n                # - Удаляет mode полностью\n                # - Оставляет только path в required\n                # - Упрощает description функции\n=======\n                # Оптимизируем описания инструментов:\n                # - Удаляет все описания параметров\n                # - Удаляет indentation полностью\n                # - Удаляет mode полностью для всех режимов кроме orchestartor\n                # - Оставляет только path в required\n                # - Упрощает description функции\n>>>>>>> REPLACE"
+    }
+  },
+  {
+    "name": "Формат с множественными разделителями",
+    "input": {
+      "diff": "========================================\n[SEARCH]\n:start_line:462\n----------------------------------------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n========================================\n[REPLACE]\n========================================\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции\n>>>>>>>>>>>> REPLACE"
+    },
+    "expected": {
+      "diff": "<<<<<<< SEARCH\n:start_line:462\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n=======\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции\n>>>>>>> REPLACE"
+    },
+    "data": {
+      "type": "file_content",
+      "path": "test.py",
+      "content": {
+        "1": "            # Оптимизируем описания инструментов:",
+        "2": "            # - Удаляет все описания параметров",
+        "3": "            # - Удаляет indentation полностью",
+        "4": "            # - Удаляет mode полностью",
+        "5": "            # - Оставляет только path в required",
+        "6": "            # - Упрощает description функции"
+      }
+    },
+    "expected3": {
+      "diff": "<<<<<<< SEARCH\n:start_line:1\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n=======\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции\n>>>>>>> REPLACE"
+    }
+  },
+  {
+    "name": "Формат без маркеров SEARCH/REPLACE",
+    "input": {
+      "diff": ":start_line:462\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции"
+    },
+    "expected": {
+      "diff": "<<<<<<< SEARCH\n:start_line:462\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n=======\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции\n>>>>>>> REPLACE"
+    },
+    "data": {
+      "type": "file_content",
+      "path": "test.py",
+      "content": {
+        "1": "            # Оптимизируем описания инструментов:",
+        "2": "            # - Удаляет все описания параметров",
+        "3": "            # - Удаляет indentation полностью",
+        "4": "            # - Удаляет mode полностью",
+        "5": "            # - Оставляет только path в required",
+        "6": "            # - Упрощает description функции"
+      }
+    },
+    "expected3": {
+      "diff": "<<<<<<< SEARCH\n:start_line:1\n-------\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью\n            # - Оставляет только path в required\n            # - Упрощает description функции\n=======\n            # Оптимизируем описания инструментов:\n            # - Удаляет все описания параметров\n            # - Удаляет indentation полностью\n            # - Удаляет mode полностью для всех режимов кроме orchestartor\n            # - Оставляет только path в required\n            # - Упрощает description функции\n>>>>>>> REPLACE"
+    }
+  },
+  {
+    "name": "Формат с двумя :start_line: и лишним разделителем (исходный из modified_20260509_155438.json)",
+    "input": {
+      "diff": "<<<<<<< SEARCH\n:start_line:1\n-------\n:start_line:31\n        cls.test_file = os.path.join(os.path.dirname(__file__), 'assets', 'test_apply_diff_fix.json')\n=======\n        cls.test_file = os.path.join(os.path.dirname(__file__), 'assets', 'original_20260509_152958.json')\n>>>>>>> REPLACE"
+    },
+    "expected": {
+      "diff": "<<<<<<< SEARCH\n:start_line:1\n        cls.test_file = os.path.join(os.path.dirname(__file__), 'assets', 'test_apply_diff_fix.json')\n=======\n        cls.test_file = os.path.join(os.path.dirname(__file__), 'assets', 'original_20260509_152958.json')\n>>>>>>> REPLACE"
+    },
+    "data": {
+      "type": "file_content",
+      "path": "test.py",
+      "content": {
+        "1": "        cls.test_file = os.path.join(os.path.dirname(__file__), 'assets', 'test_apply_diff_fix.json')"
+      }
+    },
+    "expected3": {
+      "diff": "<<<<<<< SEARCH\n:start_line:1\n        cls.test_file = os.path.join(os.path.dirname(__file__), 'assets', 'test_apply_diff_fix.json')\n=======\n        cls.test_file = os.path.join(os.path.dirname(__file__), 'assets', 'original_20260509_152958.json')\n>>>>>>> REPLACE"
+    }
+  },
+  {
+    "name": "Формат из original_20260509_152958.json с многострочной заменой",
+    "input": {
+      "diff": "<<<<<<< SEARCH\n:start_line:1637\n                    func_path = tc['function']['arguments']['path']\n                    func_name = tc['function']['arguments']['name']\n=======\n                    # Парсим аргументы через _parse_arguments, который исправит формат\n                    try:\n                        parsed_args = self._parse_arguments(tc['function']['arguments'], tool_name, tc['id'])\n                        func_path = parsed_args.get('path', '')\n                        func_name = parsed_args.get('function', '')\n                    except Exception as e:\n                        print(f\"[ERROR] Не удалось распарсить аргументы для {tool_name}: {e}\")\n                        func_path = ''\n                        func_name = ''\n>>>>>>> REPLACE"
+    },
+    "expected": {
+      "diff": "<<<<<<< SEARCH\n:start_line:1\n                    func_path = tc['function']['arguments']['path']\n                    func_name = tc['function']['arguments']['name']\n=======\n                    # Парсим аргументы через _parse_arguments, который исправит формат\n                    try:\n                        parsed_args = self._parse_arguments(tc['function']['arguments'], tool_name, tc['id'])\n                        func_path = parsed_args.get('path', '')\n                        func_name = parsed_args.get('function', '')\n                    except Exception as e:\n                        print(f\"[ERROR] Не удалось распарсить аргументы для {tool_name}: {e}\")\n                        func_path = ''\n                        func_name = ''\n>>>>>>> REPLACE"
+    },
+    "data": {
+      "type": "file_content",
+      "path": "test.py",
+      "content": {
+        "1": "                    func_path = tc['function']['arguments']['path']",
+        "2": "                    func_name = tc['function']['arguments']['name']"
+      }
+    },
+    "expected3": {
+      "diff": "<<<<<<< SEARCH\n:start_line:1\n                    func_path = tc['function']['arguments']['path']\n                    func_name = tc['function']['arguments']['name']\n=======\n                    # Парсим аргументы через _parse_arguments, который исправит формат\n                    try:\n                        parsed_args = self._parse_arguments(tc['function']['arguments'], tool_name, tc['id'])\n                        func_path = parsed_args.get('path', '')\n                        func_name = parsed_args.get('function', '')\n                    except Exception as e:\n                        print(f\"[ERROR] Не удалось распарсить аргументы для {tool_name}: {e}\")\n                        func_path = ''\n                        func_name = ''\n>>>>>>> REPLACE"
+    }
+  }
+]
