@@ -1,0 +1,5 @@
+{
+    "body": {
+        "diff": "<<<<<<< SEARCH\n:start_line:1\n:start_line:31\n        cls.test_file = os.path.join(os.path.dirname(__file__), 'assets', 'test_apply_diff_fix.json')\n=======\n        cls.test_file = os.path.join(os.path.dirname(__file__), 'assets', 'original_20260509_152958.json')\n>>>>>>> REPLACE"
+    }
+}

@@ -1,0 +1,3 @@
+{
+    "diff": "<<<<<<< SEARCH\n:start_line:161\n-------\n        print(f\"\\n{BOLD}{'='*80}{RESET}\")\n        print(f\"{BOLD}ТЕСТИРОВАНИЕ ИСПРАВЛЕНИЯ APPLY_DIFF{RESET}\")\n        print(f\"{BOLD}{'='*80}{RESET}\")\n        print(f\"\\n📋 Загружено тестов: {len(test_cases)}\")\n=======\n        print(f\"\\n{BOLD}{'='*80}{RESET}\")\n        print(f\"{BOLD}TESTING APPLY_DIFF FIX{RESET}\")\n        print(f\"{BOLD}{'='*80}{RESET}\")\n        print(f\"\\n[INFO] Loaded {len(test_cases)} tests\")\n>>>>>>> REPLACE"
+}

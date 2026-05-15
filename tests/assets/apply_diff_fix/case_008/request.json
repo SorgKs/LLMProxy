@@ -1,0 +1,5 @@
+{
+    "body": {
+        "diff": "<<<<<<< SEARCH\n:start_line:1637\n                    func_path = tc['function']['arguments']['path']\n                    func_name = tc['function']['arguments']['name']\n=======\n                    # Парсим аргументы через _parse_arguments, который исправит формат\n                    try:\n                        parsed_args = self._parse_arguments(tc['function']['arguments'], tool_name, tc['id'])\n                        func_path = parsed_args.get('path', '')\n                        func_name = parsed_args.get('function', '')\n                    except Exception as e:\n                        print(f\"[ERROR] Не удалось распарсить аргументы для {tool_name}: {e}\")\n                        func_path = ''\n                        func_name = ''\n>>>>>>> REPLACE"
+    }
+}

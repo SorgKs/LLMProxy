@@ -1,0 +1,8 @@
+{
+    "type": "file_content",
+    "path": "test.py",
+    "content": {
+        "1": "                    func_path = tc['function']['arguments']['path']",
+        "2": "                    func_name = tc['function']['arguments']['name']"
+    }
+}
