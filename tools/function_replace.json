@@ -1,0 +1,27 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "function_replace",
+      "description": "Полностью заменяет функцию в файле новым кодом. Инструмент находит определение функции в указанном файле и заменяет его на полный новый код функции.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Путь к файлу, содержащему функцию (относительно workspace)"
+          },
+          "function": {
+            "type": "string",
+            "description": "Имя функции для замены"
+          },
+          "full_code": {
+            "type": "string",
+            "description": "Полный новый код функции, включая определение def"
+          }
+        },
+        "required": ["path", "function", "full_code"]
+      }
+    }
+  }
+]
