@@ -1,0 +1,367 @@
+[
+  {
+    "name": "Первый запрос: function_replace → read_file",
+    "description": "LLM возвращает function_replace, данных нет — proxy отвечает read_file",
+    "request": {
+      "model": "test-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Change the add function to multiply"
+        }
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "function_replace",
+            "description": "Replace function code"
+          }
+        }
+      ]
+    },
+    "mock_llm": {
+      "full_response": {
+        "id": "test-001",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "test-model",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "tc-func-1",
+                  "type": "function",
+                  "function": {
+                    "name": "function_replace",
+                    "arguments": "{\"path\":\"calc.py\",\"function\":\"add\",\"full_code\":\"def add(a, b):\\n    return a * b\\n\"}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ]
+      },
+      "duration": 0.5,
+      "status_code": 200,
+      "is_error": false,
+      "is_stream": false,
+      "headers": {}
+    },
+    "mock_process": {
+      "action": "request_file",
+      "path": "calc.py",
+      "function_name": "add",
+      "full_code": "def add(a, b):\n    return a * b\n",
+      "original_tc": {
+        "id": "tc-func-1",
+        "type": "function",
+        "function": {
+          "name": "function_replace",
+          "arguments": "{\"path\":\"calc.py\",\"function\":\"add\",\"full_code\":\"def add(a, b):\\n    return a * b\\n\"}"
+        }
+      }
+    },
+    "expected": {
+      "status_code": 200,
+      "tool_call_name": "read_file"
+    }
+  },
+  {
+    "name": "Второй запрос: read_file response → apply_diff",
+    "description": "Клиент прислал read_file с данными, proxy извлекает контент и отвечает apply_diff",
+    "setup": {
+      "process_request": {
+        "calc.py": {
+          "function_name": "add",
+          "full_code": "def add(a, b):\n    return a * b\n",
+          "request_body": {
+            "model": "test-model",
+            "messages": []
+          }
+        }
+      }
+    },
+    "request": {
+      "model": "test-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Change the add function to multiply"
+        },
+        {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "tc-func-1",
+              "type": "function",
+              "function": {
+                "name": "function_replace",
+                "arguments": "{\"path\":\"calc.py\",\"function\":\"add\",\"full_code\":\"def add(a, b):\\n    return a * b\\n\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_calls": [
+            {
+              "id": "call_req_file_123",
+              "type": "function",
+              "function": {
+                "name": "read_file",
+                "arguments": "{\"path\":\"calc.py\",\"content\":\"# Calculator\\ndef add(a, b):\\n    return a + b\\n\\ndef sub(a, b):\\n    return a - b\\n\",\"line_count\":5,\"EOF\":true,\"offset\":1}"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "mock_llm": {
+      "full_response": {
+        "id": "test-002",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "test-model",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "tc-func-2",
+                  "type": "function",
+                  "function": {
+                    "name": "function_replace",
+                    "arguments": "{\"path\":\"calc.py\",\"function\":\"add\",\"full_code\":\"def add(a, b):\\n    return a * b\\n\"}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ]
+      },
+      "duration": 0.5,
+      "status_code": 200,
+      "is_error": false,
+      "is_stream": false,
+      "headers": {}
+    },
+    "mock_process": {
+      "action": "replace_with_apply_diff",
+      "path": "calc.py",
+      "diff": "--- calc.py\\n+++ calc.py\\n@@ -1,3 +1,3 @@\\n # Calculator\\n-def add(a, b):\\n-    return a + b\\n+def add(a, b):\\n+    return a * b\\n",
+      "tool_call": {
+        "id": "tc-apply-1",
+        "type": "function",
+        "function": {
+          "name": "apply_diff",
+          "arguments": "{\"path\":\"calc.py\",\"diff\":\"--- calc.py\\n+++ calc.py\\n...\")}"
+        }
+      }
+    },
+    "expected": {
+      "status_code": 200,
+      "tool_call_name": "apply_diff"
+    }
+  },
+  {
+    "name": "Второй запрос: read_file но данные недостаточны → read_file снова",
+    "description": "Контент файла присутствует, но не содержит целевую функцию. Proxy снова запрашивает read_file.",
+    "setup": {
+      "process_request": {
+        "calc.py": {
+          "function_name": "multiply",
+          "full_code": "def multiply(a, b):\\n    return a * b\\n",
+          "request_body": {
+            "model": "test-model",
+            "messages": []
+          }
+        }
+      }
+    },
+    "request": {
+      "model": "test-model",
+      "messages": [
+        {
+          "role": "tool",
+          "tool_calls": [
+            {
+              "id": "call_req_file_456",
+              "type": "function",
+              "function": {
+                "name": "read_file",
+                "arguments": "{\"path\":\"other.py\",\"content\":\"# Other file\\ndef foo():\\n    pass\\n\",\"line_count\":2,\"EOF\":true,\"offset\":1}"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "mock_llm": {
+      "full_response": {
+        "id": "test-003",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "test-model",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "tc-func-3",
+                  "type": "function",
+                  "function": {
+                    "name": "function_replace",
+                    "arguments": "{\"path\":\"calc.py\",\"function\":\"multiply\",\"full_code\":\"def multiply(a, b):\\n    return a * b\\n\"}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ]
+      },
+      "duration": 0.5,
+      "status_code": 200,
+      "is_error": false,
+      "is_stream": false,
+      "headers": {}
+    },
+    "mock_process": {
+      "action": "request_file",
+      "path": "calc.py",
+      "function_name": "multiply",
+      "full_code": "def multiply(a, b):\n    return a * b\n"
+    },
+    "expected": {
+      "status_code": 200,
+      "tool_call_name": "read_file"
+    }
+  },
+  {
+    "name": "Обычный запрос без function_replace → обычный ответ",
+    "description": "process() возвращает None, ответ содержит content без tool_call",
+    "request": {
+      "model": "test-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Hello, how are you?"
+        }
+      ]
+    },
+    "mock_llm": {
+      "full_response": {
+        "id": "test-004",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "test-model",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": "I'm fine, thanks!"
+            },
+            "finish_reason": "stop"
+          }
+        ]
+      },
+      "duration": 0.5,
+      "status_code": 200,
+      "is_error": false,
+      "is_stream": false,
+      "headers": {}
+    },
+    "mock_process": null,
+    "expected": {
+      "status_code": 200,
+      "content_contains": "I'm fine, thanks!"
+    }
+  },
+  {
+    "name": "function_replace → apply_diff с полной заменой tool_call",
+    "description": "process() возвращает replace_with_apply_diff, ответ содержит apply_diff tool_call",
+    "request": {
+      "model": "test-model",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Fix the bug in parse_args"
+        }
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "function_replace",
+            "description": "Replace function code"
+          }
+        }
+      ]
+    },
+    "mock_llm": {
+      "full_response": {
+        "id": "test-005",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "test-model",
+        "choices": [
+          {
+            "index": 0,
+            "message": {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "tc-func-5",
+                  "type": "function",
+                  "function": {
+                    "name": "function_replace",
+                    "arguments": "{\"path\":\"answers.py\",\"function\":\"_parse_arguments\",\"full_code\":\"def _parse_arguments(self, args_str, tool_name):\\n    return {}\"}"
+                  }
+                }
+              ]
+            },
+            "finish_reason": "tool_calls"
+          }
+        ]
+      },
+      "duration": 0.5,
+      "status_code": 200,
+      "is_error": false,
+      "is_stream": false,
+      "headers": {}
+    },
+    "mock_process": {
+      "action": "replace_with_apply_diff",
+      "path": "answers.py",
+      "diff": "--- answers.py\\n+++ answers.py\\n@@ -371,7 +371,7 @@\\n     try:\\n         parsed = json.loads(args_str)\\n...",
+      "tool_call": {
+        "id": "tc-apply-5",
+        "type": "function",
+        "function": {
+          "name": "apply_diff",
+          "arguments": "{\"path\":\"answers.py\",\"diff\":\"...\"}"
+        }
+      }
+    },
+    "expected": {
+      "status_code": 200,
+      "tool_call_name": "apply_diff"
+    }
+  }
+]

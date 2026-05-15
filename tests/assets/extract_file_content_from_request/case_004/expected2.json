@@ -1,0 +1,9 @@
+{
+    "type": "function_content",
+    "path": "temp/test.py",
+    "function": "greet",
+    "content": {
+        "1": "def greet(name):",
+        "2": "    return f\"Hello, {name}!\""
+    }
+}

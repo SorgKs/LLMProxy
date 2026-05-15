@@ -1,0 +1,33 @@
+{
+    "type": "file_content",
+    "path": "temp/test.py",
+    "line_count": 26,
+    "content": {
+        "1": "import math",
+        "2": "",
+        "3": "def solve_quadratic(a, b, c):",
+        "4": "    \"\"\"Решает квадратное уравнение ax² + bx + c = 0 и возвращает результат.\"\"\"",
+        "5": "    discriminant = b**2 - 4*a*c",
+        "6": "",
+        "7": "    if discriminant > 0:",
+        "8": "        x1 = (-b + math.sqrt(discriminant)) / (2*a)",
+        "9": "        x2 = (-b - math.sqrt(discriminant)) / (2*a)",
+        "10": "        return f\"Два корня: x₁ = {x1}, x₂ = {x2}\", discriminant",
+        "11": "    elif discriminant == 0:",
+        "12": "        x = -b / (2*a)",
+        "13": "        return f\"Один корень: x = {x}\", discriminant",
+        "14": "    else:",
+        "15": "        return \"Нет действительных корней\", discriminant",
+        "16": "",
+        "17": "if __name__ == \"__main__\":",
+        "18": "    a = float(input(\"Введите коэффициент a: \"))",
+        "19": "    b = float(input(\"Введите коэффициент b: \"))",
+        "20": "    c = float(input(\"Введите коэффициент c: \"))",
+        "21": "",
+        "22": "    print(f\"\\nРешаем уравнение: {a}x² + {b}x + {c} = 0\")",
+        "23": "",
+        "24": "    result, discriminant = solve_quadratic(a, b, c)",
+        "25": "    print(f\"Дискриминант: {discriminant}\")",
+        "26": "    print(result)"
+    }
+}

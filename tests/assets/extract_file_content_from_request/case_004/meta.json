@@ -1,0 +1,5 @@
+{
+    "path": "temp/test.py",
+    "function": "greet",
+    "type": "function_content"
+}

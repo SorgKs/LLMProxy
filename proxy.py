@@ -23,6 +23,7 @@ except Exception:
 
 from answers import AnswerProcessor
 from requests import RequestProcessor, _extract_data_from_request
+from handlers import save_json_content
 from dataclasses import dataclass
 from typing import Dict, Any, List, Optional
 
@@ -191,63 +192,10 @@ async def send_with_retry(
     }
 
 
-def _cleanup_responses_folder() -> None:
-    """Очищает папку responses: хранит только за последние 24 часа, но не более 30 файлов."""
-    try:
-        responses_dir = 'responses'
-        if not os.path.exists(responses_dir):
-            return
-        
-        # Получаем все json файлы
-        files = []
-        for filename in os.listdir(responses_dir):
-            if filename.endswith('.json'):
-                filepath = os.path.join(responses_dir, filename)
-                stat = os.stat(filepath)
-                files.append({
-                    'path': filepath,
-                    'mtime': stat.st_mtime
-                })
-        
-        if not files:
-            return
-        
-        # Сортируем по времени (новейшие первые)
-        files.sort(key=lambda x: x['mtime'], reverse=True)
-        
-        now = datetime.now()
-        cutoff_24h = now.timestamp() - 24 * 60 * 60
-        
-        # Файлы для удаления: старше 24 часов или превышают лимит 30 файлов
-        files_to_delete = []
-        for i, f in enumerate(files):
-            if f['mtime'] < cutoff_24h:
-                files_to_delete.append(f['path'])
-            elif i >= 30:
-                files_to_delete.append(f['path'])
-        
-        for filepath in files_to_delete:
-            os.remove(filepath)
-            
-    except Exception as e:
-        logger.error(f"Ошибка при очистке папки responses: {e}")
-
-
 def save_response(modified: bool, full_response: Dict[str, Any]) -> None:
     """Сохраняет ответ в файл responses/original_*.json или responses/modified_*.json"""
-    try:
-        os.makedirs('responses', exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        kind = "modified" if modified else "original"
-        filename = f"responses/{kind}_{timestamp}.json"
-        
-        with open(filename, 'w', encoding='utf-8') as f:
-            json.dump(full_response, f, ensure_ascii=False, indent=2)
-        
-        # Очищаем старые файлы после сохранения
-        _cleanup_responses_folder()
-    except Exception as e:
-        logger.info(f"[-] Ошибка при сохранении ответа: {e}")
+    prefix = "modified_response" if modified else "original_response"
+    save_json_content("responses", full_response, prefix)
 
 
 def create_error_response(
@@ -409,11 +357,7 @@ async def proxy_chat_completions(request: Request):
                 answer = copy.deepcopy(_process_request_pending["original_response"])
                 logger.info(f"REQ | Получены данные для файла: path={pending_data.get('path')}")
                 # Обрабатываем ответ с данными файла (apply_diff, function_replace)
-                process_result = answer_processor.process(answer, data=pending_data)
-                _process_request_pending = None
-                if isinstance(process_result, dict):
-                    action = process_result.get("action")
-                    logger.warning(f"Unexpected action from process(): {action}")
+                break
         else:
             logger.debug(f"[DEBUG proxy_chat_completions] Ветка else: _process_request_pending пуст, отправляем запрос в LLM")
             # Отправка ТЕКУЩЕГО запроса с retry

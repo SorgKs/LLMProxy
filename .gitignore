@@ -63,3 +63,5 @@ Thumbs.db
 
 # Roo Code tools secrets
 .roo/tools/.env
+
+!tests/**/*.json

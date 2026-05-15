@@ -1,0 +1,147 @@
+[
+  {
+    "name": "search_files с двойным экранированием JSON (исходная ошибка)",
+    "input": {
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "fc-test",
+          "function": {
+            "name": "search_files",
+            "arguments": "\"{\\\"path\\\": \\\".\\\", \\\"regex\\\": \\\\\\\"RequestProcessor\\\\\\\", \\\"file_pattern\\\": \\\"*.py\\\"}\""
+          }
+        }
+      ]
+    },
+    "expected": {
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "fc-test",
+          "function": {
+            "name": "search_files",
+            "arguments": "{\"path\": \".\", \"regex\": \"RequestProcessor\", \"file_pattern\": \"*.py\"}"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "list_files с двойным экранированием",
+    "input": {
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "fc-test",
+          "function": {
+            "name": "list_files",
+            "arguments": "\"{\\\"path\\\": \".\", \\\"recursive\\\": true}\""
+          }
+        }
+      ]
+    },
+    "expected": {
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "fc-test",
+          "function": {
+            "name": "list_files",
+            "arguments": "{\"path\": \".\", \"recursive\": true}"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "search_files с тройным экранированием (extreme case)",
+    "input": {
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "fc-test",
+          "function": {
+            "name": "search_files",
+            "arguments": "\\\"{\\\\\\\"path\\\\\\\": \\\\\\\".\\\\\\\", \\\\\\\"regex\\\\\\\": \\\\\\\\\\\\\\\"RequestProcessor\\\\\\\\\\\\\\\"}\\\""
+          }
+        }
+      ]
+    },
+    "expected": {
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "fc-test",
+          "function": {
+            "name": "search_files",
+            "arguments": "{\"path\": \".\", \"regex\": \"RequestProcessor\"}"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "search_files без экранирования (нормальный случай)",
+    "input": {
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "fc-test",
+          "function": {
+            "name": "search_files",
+            "arguments": "{\"path\": \".\", \"regex\": \"RequestProcessor\", \"file_pattern\": \"*.py\"}"
+          }
+        }
+      ]
+    },
+    "expected": {
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "fc-test",
+          "function": {
+            "name": "search_files",
+            "arguments": "{\"path\": \".\", \"regex\": \"RequestProcessor\", \"file_pattern\": \"*.py\"}"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "read_file с двойным экранированием (для сравнения)",
+    "input": {
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "fc-test",
+          "function": {
+            "name": "read_file",
+            "arguments": "\"{\\\"path\": \"requests.py\", \\\"mode\": \"slice\"}\""
+          }
+        }
+      ]
+    },
+    "expected": {
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "fc-test",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\": \"requests.py\", \"mode\": \"slice\"}"
+          }
+        }
+      ]
+    }
+  }
+]

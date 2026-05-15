@@ -1,0 +1,28 @@
+{
+    "type": "file_content",
+    "path": "temp/test.py",
+    "content": {
+        "1": "import math",
+        "2": "",
+        "3": "a = float(input(\"Введите коэффициент a: \"))",
+        "4": "b = float(input(\"Введите коэффициент b: \"))",
+        "5": "c = float(input(\"Введите коэффициент c: \"))",
+        "6": "",
+        "7": "print(f\"\\nРешаем уравнение: {a}x² + {b}x + {c} = 0\")",
+        "8": "",
+        "9": "discriminant = b**2 - 4*a*c",
+        "10": "print(f\"Дискриминант: {discriminant}\")",
+        "11": "",
+        "12": "if discriminant > 0:",
+        "13": "    x1 = (-b + math.sqrt(discriminant)) / (2*a)",
+        "14": "    x2 = (-b - math.sqrt(discriminant)) / (2*a)",
+        "15": "    print(f\"Два корня: x₁ = {x1}, x₂ = {x2}\")",
+        "16": "elif discriminant == 0:",
+        "17": "    x = -b / (2*a)",
+        "18": "    print(f\"Один корень: x = {x}\")",
+        "19": "else:",
+        "20": "    print(\"Нет действительных корней\")"
+    },
+    "EOF": true,
+    "line_count": 20
+}

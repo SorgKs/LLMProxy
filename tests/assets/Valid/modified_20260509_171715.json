@@ -1,0 +1,64 @@
+{
+  "id": "gen-1778336229-2ilS6FyG7LK2vAxFsToj",
+  "object": "chat.completion",
+  "created": 1778336229,
+  "model": "poolside/laguna-m.1-20260312:free",
+  "provider": "Poolside",
+  "system_fingerprint": null,
+  "choices": [
+    {
+      "index": 0,
+      "logprobs": null,
+      "finish_reason": "tool_calls",
+      "native_finish_reason": "tool_calls",
+      "message": {
+        "role": "assistant",
+        "content": "",
+        "refusal": null,
+        "reasoning": "\nНужно использовать правильный `:start_line`. Использую строку 389:\n",
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-ad3c4e1e10f15ceb",
+            "function": {
+              "name": "apply_diff",
+              "arguments": "{\"path\": \"answers.py\", \"diff\": \"<<<<<<< SEARCH\\n:start_line:389\\n-------\\n        # 0. Раскрываем двойное экранирование\\n        args_str = self._unwrap_double_encoding(args_str)\\n\\n        # 1. Пробуем как JSON\\n        try:\\n            parsed = json.loads(args_str)\\n            if isinstance(parsed, dict):\\n                return parsed\\n            raise ArgumentParseError(\\n                f\\\"JSON распарсен, но результат не dict (тип: {type(parsed).__name__})\\\",\\n                tool_name=tool_name, tool_call_id=tool_call_id, original_args=args_str\\n            )\\n        except json.JSONDecodeError:\\n            pass\\n        \\n        # 2. Пробуем восстановить невалидный JSON\\n        fixed_args = self._try_fix_json(args_str)\\n        if fixed_args != args_str:\\n            try:\\n                parsed = json.loads(fixed_args)\\n                if isinstance(parsed, dict):\\n                    return parsed\\n            except json.JSONDecodeError:\\n                pass\\n        \\n        # 3. Пробуем распарсить Python-подобный синтаксис\\n        try:\\n            return self._args_to_dict(args_str, tool_name, tool_call_id)\\n        except ArgumentParseError:\\n            pass\\n=======\\n        # 0. Раскрываем двойное экранирование\\n        args_str = self._unwrap_double_encoding(args_str)\\n\\n        # 1. Пробуем как JSON\\n        try:\\n            parsed = json.loads(args_str)\\n            if isinstance(parsed, dict):\\n                return parsed\\n            raise ArgumentParseError(\\n                f\\\"JSON распарсен, но результат не dict (тип: {type(parsed).__name__})\\\",\\n                tool_name=tool_name, tool_call_id=tool_call_id, original_args=args_str\\n            )\\n        except json.JSONDecodeError:\\n            pass\\n        \\n        # 2. Пробуем распарсить Python-подобный синтаксис\\n        try:\\n            return self._args_to_dict(args_str, tool_name, tool_call_id)\\n        except ArgumentParseError:\\n            pass\\n>>>>>>> REPLACE\"}"
+            }
+          }
+        ],
+        "reasoning_details": [
+          {
+            "type": "reasoning.text",
+            "text": "\nНужно использовать правильный `:start_line`. Использую строку 389:\n",
+            "format": "unknown",
+            "index": 0
+          }
+        ]
+      }
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 49671,
+    "completion_tokens": 578,
+    "total_tokens": 50249,
+    "cost": 0,
+    "is_byok": false,
+    "prompt_tokens_details": {
+      "cached_tokens": 45472,
+      "cache_write_tokens": 0,
+      "audio_tokens": 0,
+      "video_tokens": 0
+    },
+    "cost_details": {
+      "upstream_inference_cost": 0,
+      "upstream_inference_prompt_cost": 0,
+      "upstream_inference_completions_cost": 0
+    },
+    "completion_tokens_details": {
+      "reasoning_tokens": 24,
+      "image_tokens": 0,
+      "audio_tokens": 0
+    }
+  }
+}

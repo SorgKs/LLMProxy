@@ -1,0 +1,10 @@
+{
+    "type": "file_content",
+    "path": "temp/test.py",
+    "content": {
+        "1": "def greet(name):",
+        "2": "    return f\"Hello, {name}!\""
+    },
+    "EOF": true,
+    "line_count": 2
+}
