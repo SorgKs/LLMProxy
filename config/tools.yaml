@@ -5,7 +5,7 @@ tools:
   attempt_completion: true
   codebase_search: true
   execute_command: true
-  function_replace: true
+  function_replace: false
   list_files: true
   new_task: true
   read_command_output: true

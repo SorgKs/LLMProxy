@@ -29,7 +29,7 @@ from typing import Dict, Any, List, Optional
 
 # Настройка логгера
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(),  # Вывод в консоль
@@ -357,7 +357,6 @@ async def proxy_chat_completions(request: Request):
                 answer = copy.deepcopy(_process_request_pending["original_response"])
                 logger.info(f"REQ | Получены данные для файла: path={pending_data.get('path')}")
                 # Обрабатываем ответ с данными файла (apply_diff, function_replace)
-                break
         else:
             logger.debug(f"[DEBUG proxy_chat_completions] Ветка else: _process_request_pending пуст, отправляем запрос в LLM")
             # Отправка ТЕКУЩЕГО запроса с retry

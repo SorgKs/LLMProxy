@@ -85,6 +85,9 @@ class TestApplyDiffFix:
                 "data": data
             })
 
+        print("======test_cases========")
+        print(test_cases)
+        print("========================")
         return test_cases
 
     def normalize_diff(self, diff: str) -> str:
@@ -179,10 +182,23 @@ class TestApplyDiffFix:
                     "diff": test_case["body"].get("diff", "")
                 }
 
-                # Используем _fix_apply_diff_tool
-                self.processor._fix_apply_diff_tool(args, test_case["data"], debug=False)
 
-                actual_diff = args["diff"]
+                print("==========init_args==========")
+                print(args)
+                print("=============================")
+                # Формируем tc в нужном формате для _fix_apply_diff_tool
+                tc = {
+                    "function": {
+                        "arguments": {
+                            "path": args["path"],
+                            "diff": args["diff"]
+                        }
+                    }
+                }
+                # Используем _fix_apply_diff_tool
+                self.processor._fix_apply_diff_tool(tc, test_case["data"], debug=False)
+
+                actual_diff = tc["function"]["arguments"]["diff"]
                 print("========actual_diff===========")
                 print(actual_diff)
                 print("==============================")
@@ -208,11 +224,15 @@ class TestApplyDiffFix:
                     if normalized_actual != normalized_expected:
                         print(f"{YELLOW}     Результат не соответствует ожидаемому{RESET}")
 
-                        debug_args = {
-                            "path": test_case["meta"].get("path", "test.py"),
-                            "diff": test_case["body"].get("diff", "")
+                        debug_tc = {
+                            "function": {
+                                "arguments": {
+                                    "path": test_case["meta"].get("path", "test.py"),
+                                    "diff": test_case["body"].get("diff", "")
+                                }
+                            }
                         }
-                        self.processor._fix_apply_diff_tool(debug_args, test_case["data"], debug=True)
+                        self.processor._fix_apply_diff_tool(debug_tc, test_case["data"], debug=True)
 
                         actual_lines = normalized_actual.split('\n')
                         expected_lines = normalized_expected.split('\n')

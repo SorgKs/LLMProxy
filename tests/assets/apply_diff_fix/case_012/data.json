@@ -1,0 +1,32 @@
+{
+  "type": "file_content",
+  "path": "answers.py",
+  "content": {
+    "799": "            self._print_diff_preview(lines, f\"После шага {step}\")",
+    "800": "            print(separator_indices)",
+    "801": "        ",
+    "802": "        # 2-й разделитель: -------",
+    "803": "        old = lines[separator_indices[1]]",
+    "804": "        lines[separator_indices[1]] = '-------'",
+    "805": "        if debug:",
+    "806": "            print(f\"  Разделитель 2 (строка {separator_indices[1]}): '{old}' -> '-------'\")",
+    "807": "            self._print_diff_preview(lines, f\"После шага {step}\")",
+    "808": "        ",
+    "809": "        # 3-й разделитель: =======",
+    "810": "        try:",
+    "811": "            old = lines[separator_indices[2]]",
+    "812": "            lines[separator_indices[2]] = '======='",
+    "813": "        except Exception as e:",
+    "814": "            pass",
+    "815": "        if debug:",
+    "816": "            try:",
+    "817": "                print(f\"  Разделитель 3 (строка {separator_indices[2]}): '{old}' -> '======='\")",
+    "818": "                self._print_diff_preview(lines, f\"После шага {step}\")",
+    "819": "            except Exception:",
+    "820": "                pass",
+    "821": "        ",
+    "822": "        # 4-й разделитель: >>>>>>> REPLACE",
+    "823": "        try:",
+    "824": "            old = lines[separator_indices[3]]"
+  }
+}

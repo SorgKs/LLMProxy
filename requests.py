@@ -210,45 +210,36 @@ class RequestProcessor:
             "skill": True
         }
         
-        # Сначала загружаем инструменты из папки tools/
         tools_folder = os.path.join(os.path.dirname(config_path) or ".", "..", "tools")
         tools_folder = os.path.normpath(tools_folder)
         tools_from_folder = self._load_tools_from_folder(tools_folder)
         
-        # Собираем имена инструментов из папки
-        folder_tool_names = set()
-        for tool in tools_from_folder:
-            name = tool.get("function", {}).get("name", "")
-            if name:
-                folder_tool_names.add(name)
-        
-        # Если есть инструменты из папки, обновляем default_config
-        if folder_tool_names:
-            for name in folder_tool_names:
-                if name not in default_config:
-                    default_config[name] = True
-            self.changes_log.append(f"📁 Загружено {len(tools_from_folder)} инструмент(ов) из папки tools/")
+        folder_tool_names = {
+            tool.get("function", {}).get("name", "")
+            for tool in tools_from_folder
+            if tool.get("function", {}).get("name", "")
+        }
         
         try:
             if os.path.exists(config_path):
                 with open(config_path, 'r', encoding='utf-8') as f:
-                    config = yaml.safe_load(f)
+                    tools_config = dict(yaml.safe_load(f).get("tools", {}))
                 
-                # Парсим YAML структуру: ожидаем tools как корневой ключ
-                tools_config = {}
+                for name in folder_tool_names:
+                    if name not in tools_config:
+                        tools_config[name] = True
                 
-                tools = config.get("tools")
-                if tools and isinstance(tools, dict):
-                    for tool_name, tool_enabled in tools.items():
-                        tools_config[tool_name] = tool_enabled
-                
+                if folder_tool_names:
+                    self.changes_log.append(f"📁 Загружено {len(tools_from_folder)} инструмент(ов) из папки tools/")
                 self.changes_log.append(f"📋 Загружена конфигурация инструментов из {config_path}")
-
                 return tools_config
                 
         except Exception as e:
             self.changes_log.append(f"❌ Ошибка загрузки {config_path}: {str(e)}")
-            return default_config
+        
+        tools_config = dict(default_config)
+        tools_config.update({name: True for name in folder_tool_names})
+        return tools_config
 
     
     def _filter_tools_by_config(self, tools: List[Dict]) -> List[Dict]:

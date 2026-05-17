@@ -1,0 +1,5 @@
+{
+    "body": {
+        "diff": "=======\n        # 3-й разделитель: =======\n        try:\n            old = lines[separator_indices[2]]\n            lines[separator_indices[2]] = '======='\n        except Exception as e:\n            pass\n=======\n        # 3-й разделитель: =======\n        old = lines[separator_indices[2]]\n        lines[separator_indices[2]] = '======='\n>>>>>>> REPLACE"
+    }
+}

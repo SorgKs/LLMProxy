@@ -7,6 +7,27 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 
+class Colors:
+    """ANSI цвета для вывода"""
+    GREEN = '\033[92m'
+    RED = '\033[91m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    MAGENTA = '\033[95m'
+    CYAN = '\033[96m'
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+
+
+class ArgumentParseError(Exception):
+    """Исключение при ошибке парсинга аргументов tool call"""
+    def __init__(self, message: str, tool_name: str = None, tool_call_id: str = None, original_args: str = None):
+        self.tool_name = tool_name
+        self.tool_call_id = tool_call_id
+        self.original_args = original_args
+        super().__init__(message)
+
+
 def validate_fields(func_name: str, obj_name: str, data, fields: list) -> None:
     """
     Проверяет что все обязательные поля присутствуют в словаре или объекте.
