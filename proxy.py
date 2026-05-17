@@ -133,9 +133,10 @@ async def send_with_retry(
     url = f"{OPENROUTER_URL}/chat/completions"
     
     for attempt in range(max_retries + 1):
-        logger.debug(f"[DEBUG send_with_retry] Начало цикла retry attempt={attempt + 1}/{max_retries + 1}")
         try:
             start_time = time.time()
+            request_type = f"LLM" if attempt == 0 else f"RETRY{attempt}"
+            logger.info(f"REQ | {request_type} | size={len(str(request_body))}")
             
             async with httpx.AsyncClient(timeout=180.0) as client:
                 resp = await client.post(
@@ -295,18 +296,19 @@ async def proxy_chat_completions(request: Request):
     if "tools" in modified_body:
         available_tools = [tool.get("function", {}).get("name", "") for tool in modified_body["tools"]]
     
-    # 📤 Вывод информации о запросе (метаданные) + файл (полный контент)
-    logger.info(f"REQ | size={len(str(body))} | tools={len(available_tools)}")
+# 📤 Вывод информации о запросе (метаданные) + файл (полный контент)
+    logger.info(f"REQ | CLIENT | size={len(str(body))} | tools={len(available_tools)}")
     
     # Настройки self-correction
     max_corrections = 2
     current_body = modified_body
     final_answer = None
     correction_attempt = 0
+    process_duration_ms = 0
 
     # Цикл self-correction (отправка НОВЫХ запросов при невалидных tool calls)
     while correction_attempt <= max_corrections:
-        logger.debug(f"[DEBUG proxy_chat_completions] Начало цикла while correction_attempt={correction_attempt}/{max_corrections}")
+        logger.debug(f"[DEBUG proxy_chat_completions] While start")
         pending_data = None
         if _process_request_pending:
             logger.debug(f"[DEBUG proxy_chat_completions] Ветка if: _process_request_pending существует, path={_process_request_pending.get('path')}")
@@ -355,10 +357,9 @@ async def proxy_chat_completions(request: Request):
             else:
                 logger.debug(f"[DEBUG proxy_chat_completions] Ветка else (nested): pending_data найден, используем deep copy original_response")
                 answer = copy.deepcopy(_process_request_pending["original_response"])
-                logger.info(f"REQ | Получены данные для файла: path={pending_data.get('path')}")
+                logger.info(f"REQ | DATA | Получены данные для файла: path={pending_data.get('path')}")
                 # Обрабатываем ответ с данными файла (apply_diff, function_replace)
         else:
-            logger.debug(f"[DEBUG proxy_chat_completions] Ветка else: _process_request_pending пуст, отправляем запрос в LLM")
             # Отправка ТЕКУЩЕГО запроса с retry
             collected_data = await send_with_retry(
                 current_body,
@@ -414,10 +415,12 @@ async def proxy_chat_completions(request: Request):
             # Сохраняем оригинальный ответ в файл немедленно после получения
             save_response(modified=False, full_response=answer.full_response)
             tools_list = ",".join([tc.get("function", {}).get("name", "") for tc in answer.tool_calls if "function" in tc])
-            logger.info(f"ANS | size={len(str(answer.full_response))} | status={answer.status_code} | {tools_list} | duration={answer.duration:.2f}s")
+            logger.info(f"ANS | size={len(str(answer.full_response))} | {tools_list} | {int(answer.duration)}s")
         
         # ✅ ОБРАБОТКА ОТВЕТА (исправление форматирования и т.д.)
+        process_start = time.time()
         process_result = answer_processor.process(answer, data=pending_data)
+        process_duration_ms = int((time.time() - process_start) * 1000)
 
         # Обработка действия от процессора
         if isinstance(process_result, dict):
@@ -446,6 +449,7 @@ async def proxy_chat_completions(request: Request):
                 # Добавляем в историю и продолжаем цикл
                 current_body["messages"].append(retry_message)
                 correction_attempt += 1
+                logger.debug(f"[DEBUG proxy_chat_completions] continue")
                 continue  # Повторяем запрос к LLM
                 
             else:
@@ -460,7 +464,6 @@ async def proxy_chat_completions(request: Request):
         )
         
         if is_valid:
-            logger.debug(f"[DEBUG proxy_chat_completions] Ветка if: is_valid=True - выходим из цикла")
             # Всё хорошо - выходим из цикла
             final_answer = answer
             break
@@ -481,7 +484,7 @@ async def proxy_chat_completions(request: Request):
         )
         
         # Логируем correction запрос через log_modified_request (файл) + консоль (метаданные)
-        logger.info(f"correction | attempt={correction_attempt} | invalid_tools={len(invalid_tools)}")
+        logger.info(f"REQ | REPEAT{correction_attempt} | size={len(str(current_body))} | invalid_tools={len(invalid_tools)}")
         
     # Отправка ответа клиенту
     if final_answer is None:
@@ -497,7 +500,7 @@ async def proxy_chat_completions(request: Request):
     save_response(modified=True, full_response=final_answer.full_response)
     
     tools_list = ",".join([tc.get("function", {}).get("name", "") for tc in final_answer.tool_calls if "function" in tc])
-    logger.info(f"ANS | size={len(str(final_answer.full_response))} | status={final_answer.status_code} | {tools_list} | duration={final_answer.duration:.2f}s")
+    logger.info(f"ANS | size={len(str(final_answer.full_response))} | {tools_list} | {process_duration_ms}ms")
     
     return Response(
         content=json.dumps(final_answer.full_response),

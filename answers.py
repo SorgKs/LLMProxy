@@ -10,6 +10,8 @@ import handlers
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
 
+from fix_tool_apply_diff import FixToolApplyDiff
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,6 +28,7 @@ class AnswerProcessor:
         self.changes_log = []
         self._current_test_name = ""  # Для тестов
         self.progress = {}
+        self._fix_tool_apply_diff = FixToolApplyDiff()
         
         # Загружаем конфигурацию инструментов
         self.tools_config = self._load_tools_config(config_path)
@@ -1169,7 +1172,7 @@ class AnswerProcessor:
         try:
             old = lines[separator_indices[2]]
             lines[separator_indices[2]] = '======='
-            search_block[1] = separator_indices[2]-1-search_block[0]
+            search_block[1] = separator_indices[2]-search_block[0]
         except Exception as e:
             pass
         if debug:
@@ -1234,8 +1237,7 @@ class AnswerProcessor:
                 else:
                     if debug:
                         print(f"  ✗ SEARCH блок не найден в файле")
-                        print(search_block)
-                        print(file_content)
+                    return False, ["retry_with_llm"]
             else:
                 if debug:
                     print(f"  ✗ Не удалось извлечь SEARCH блок из diff")
@@ -1290,6 +1292,12 @@ class AnswerProcessor:
         # 2. Исправляем tool calls
         try:
             if tool_name == "read_file":
+                handlers.validate_fields(
+                    func_name="AnswerProcessor.process_single_tool_call",
+                    obj_name=f"arguments in tool_call[{index}]",
+                    data=func['arguments'],
+                    fields=['path']
+                )
                 if self._add_mode_slice_to_read_file(parsed_args):
                     changed = True
                     changes.append("read_file: добавлен mode=slice")
@@ -1298,23 +1306,55 @@ class AnswerProcessor:
                     changes.append("read_file: offset исправлен с 0 на 1")
         
             if tool_name == "apply_diff":
+                handlers.validate_fields(
+                    func_name="AnswerProcessor.process_single_tool_call",
+                    obj_name=f"arguments in tool_call[{index}]",
+                    data=func['arguments'],
+                    fields=['path', 'diff']
+                )
                 content_dict = data.get("content", {})
                 if data and data.get("type") == "file_content":
                     logger.debug(f"   - content_dict type: {type(content_dict)}")
                     logger.debug(f"   - content_dict keys count: {len(content_dict.keys()) if content_dict else 0}")
 
                     if content_dict:
-                        logger.debug(f"   ✓ Вызов _fix_apply_diff_tool...")
+                        logger.debug(f"   ✓ Вызов _diff_fixer.fix...")
                         # ПЕРЕДАЕМ СЛОВАРЬ НАПРЯМУЮ
-                        diff_result = self._fix_apply_diff_tool(tc, data, True)
-                        if diff_result:
-                            logger.debug(f"   ✓ Исправление без ошибок!")
-                            return True, [f"apply_diff: исправлен"]
-                else:
-                    logger.warning(f"   ❌ Нет данных function_content")
-                    return False, [f"function_replace: нет данных файла"]
+                        changed, final_diff = self._fix_apply_diff_tool(tc, data, True)
+                        if changed:
+                            logger.debug(f"   ✓ Исправление успешно!")
+                        # ✅ ВАЛИДАЦИЯ ФОРМАТА ПОСЛЕ ИСПРАВЛЕНИЯ
+                        diff = tc['function']['arguments'].get('diff', '')
+                        if diff:
+                            diff_lines = diff.split('\n')
+                            is_valid, errors = self._diff_fixer.validate_diff_format(diff_lines)
+                            
+                            if not is_valid:
+                                # Формируем сообщение для retry
+                                error_msg = "Неверный формат diff. Обнаружены следующие проблемы:\n"
+                                for error in errors[:5]:
+                                    error_msg += f"• {error}\n"
+                                error_msg += "\nПожалуйста, сформируйте корректный diff в формате:\n"
+                                error_msg += "<<<<<<< SEARCH\n:start_line:1\n-------\n[старый код]\n=======\n[новый код]\n>>>>>>> REPLACE"
+                                
+                                retry_message = {
+                                    "role": "user",
+                                    "content": f"❌ Ошибка валидации apply_diff:\n\n{error_msg}"
+                                }
+                                return False, ["retry_with_llm"]
+                        
+                        return True, [f"apply_diff: исправлен"]
+                    else:
+                        logger.warning(f"   ❌ Нет данных function_content")
+                        return False, [f"function_replace: нет данных файла"]
             
             if tool_name == "ask_followup_question":
+                handlers.validate_fields(
+                    func_name="AnswerProcessor.process_single_tool_call",
+                    obj_name=f"arguments in tool_call[{index}]",
+                    data=func['arguments'],
+                    fields=['question', 'follow_up']
+                )
                 if self._fix_followup_question(parsed_args):
                     changed = True
                     changes.append("ask_followup_question: follow_up строка -> массив")
@@ -1325,6 +1365,12 @@ class AnswerProcessor:
             
             # 3а. Конвертация function_replace → apply_diff
             if tool_name == "function_replace":
+                handlers.validate_fields(
+                    func_name="AnswerProcessor.process_single_tool_call",
+                    obj_name=f"arguments in tool_call[{index}]",
+                    data=func['arguments'],
+                    fields=['path', 'function', 'full_code']
+                )
                 path = parsed_args.get("path", "")
                 function_name = parsed_args.get("function", "")
                 full_code = parsed_args.get("full_code", "")
@@ -1447,35 +1493,45 @@ class AnswerProcessor:
                 if self.progress[tc['id']] == "current":
                     
                     if (tool_name == "function_replace"):
-                         logger.debug(f"[DEBUG process] Ветка if: tool_name == function_replace")
-                         func_path = tc_copy['function']['arguments']['path']
-                         func_name = tc_copy['function']['arguments']['function']
-                         logger.info(f"[request_function] Формируем запрос функции: path={func_path}, function_name={func_name}")
-                         if data and data.get("type") == "function_content" and data.get("path") == func_path:
-                             changed, changes = self.process_single_tool_call(tc_copy, i, data)
-                             self.progress[tc['id']] = "completed"
-                         else:
-                             logger.info(f"[request_function] Возврат action: path={func_path}, function_name={func_name}, data={data}")
-                             return {
-                                 'action': 'request_function',
-                                 'path': func_path,
-                                 'function_name': func_name
-                             }
+                        logger.debug(f"[DEBUG process] Ветка if: tool_name == function_replace")
+                        func_path = tc_copy['function']['arguments']['path']
+                        func_name = tc_copy['function']['arguments']['function']
+                        logger.info(f"[request_function] Формируем запрос функции: path={func_path}, function_name={func_name}")
+                        if data and data.get("type") == "function_content" and data.get("path") == func_path:
+                            changed, changes = self.process_single_tool_call(tc_copy, i, data)
+                            self.progress[tc['id']] = "completed"
+                        else:
+                            logger.info(f"[request_function] Возврат action: path={func_path}, function_name={func_name}, data={data}")
+                            return {
+                                'action': 'request_function',
+                                'path': func_path,
+                                'function_name': func_name
+                            }
                     elif (tool_name == "apply_diff"):
-                         logger.debug(f"[DEBUG process] Ветка elif: tool_name == apply_diff")
-                         diff_path = tc_copy['function']['arguments']['path']
-                         logger.info(f"[request_file] Формируем запрос файла: path={diff_path}")
-                         if data and data.get("type") == "file_content" and data.get("path") == diff_path:
-                             changed, changes = self.process_single_tool_call(tc_copy, i, data)
-                             self.progress[tc['id']] = "completed"
-                         else:
-                             logger.info(f"[request_file] Возврат action: path={diff_path}, data={data}")
-                             return {
-                                 'action': 'request_file',
-                                 'path': diff_path
-                             }
+                        logger.debug(f"[DEBUG process] Ветка elif: tool_name == apply_diff")
+                        diff_path = tc_copy['function']['arguments']['path']
+                        if data and data.get("type") == "file_content" and data.get("path") == diff_path:
+                            changed, changes = self.process_single_tool_call(tc_copy, i, data)
+
+                            # ✅ Проверяем сигнал retry
+                            if "retry_with_llm" in changes:
+                                return {
+                                    'action': 'retry_with_llm',
+                                    'message': {
+                                        "role": "user",
+                                        "content": "❌ Неверный формат apply_diff. Пожалуйста, исправьте."
+                                    },
+                                    'tool_call_id': tc['id']
+                                }
+                            
+                            self.progress[tc['id']] = "completed"
+                        else:
+                            logger.info(f"[request_file] Возврат action: path={diff_path}, data={data}")
+                            return {
+                                'action': 'request_file',
+                                'path': diff_path
+                            }
                     else:
-                        logger.debug(f"[DEBUG process] Ветка else: tool_name == {tool_name}, processing")
                         changed, changes = self.process_single_tool_call(tc_copy, i)
                         self.progress[tc['id']] = "completed"
                 
@@ -1980,13 +2036,21 @@ class AnswerProcessor:
         logger.debug(f"_find_search_block_line: поиск блока из {block_length} строк в файле из {len(file_lines)} строк")
         logger.debug(f"_find_search_block_line: блок в diff находится на строках {start_line}-{start_line + block_length - 1}")
 
-        # Список допустимых подмен символов (один вариант)
+        # Словарь подмен символов
         char_replacements = {
             '"': '«',
             "'": '′',
             '-': '—',
-            '"': '\''
+            '«': '"',
+            '′': "'",
+            '—': '-'
         }
+        
+        # Функция для нормализации строки (strip и удаление префикса "| ")
+        def normalize_line(line: str) -> str:
+            if line.startswith('| '):
+                line = line[2:]
+            return line.strip()
         
         print(f"_find_search_block_line: поиск блока из {block_length} строк в файле из {len(file_lines)} строк")
         print(f"_find_search_block_line: блок в diff находится на строках {start_line}-{start_line + block_length - 1}")
@@ -1995,6 +2059,7 @@ class AnswerProcessor:
         for i in range(len(file_lines) - block_length + 1):
             print(f"=== Поиск в файле: позиция {i} ===")
             match = True
+            matched_indices = []  # Сохраняем индексы строк, которые совпали
             
             for j in range(block_length):
                 print(f"--- Строка {j} блока ---")
@@ -2005,67 +2070,71 @@ class AnswerProcessor:
 
                 file_line = file_lines[i + j]
                 search_line = lines[start_line + j]
-
+                
+                # Нормализуем строки для сравнения
+                file_line_normalized = file_line.strip()
+                search_line_normalized = normalize_line(search_line)
+                
                 # Пустые строки считаются совпадающими
-                if file_line.strip() == '' and search_line.strip() == '':
+                if file_line_normalized == '' and search_line_normalized == '':
                     print(f"Пустые строки")
+                    matched_indices.append(j)
                     continue
                 
-                # Сначала прямое сравнение
-                if file_line == search_line:
-                    print(f"Прямое совпадение")
-                    print(f"File = '{file_line}'")
-                    print(f"Diff = '{search_line}'")
+                # Сначала прямое сравнение нормализованных строк
+                if file_line_normalized == search_line_normalized:
+                    print(f"Прямое совпадение после нормализации")
+                    print(f"File = '{file_line_normalized}'")
+                    print(f"Diff = '{search_line_normalized}'")
+                    matched_indices.append(j)
                     continue
                 
-                print(f"Несовпадение, пробуем подмену")
-                print(f"  файл: {file_line[:50]}")
-                print(f"  diff: {search_line[:50]}")
+                print(f"Несовпадение, пробуем подмену символов")
+                print(f"  файл: {file_line_normalized[:50]}")
+                print(f"  diff: {search_line_normalized[:50]}")
                 
                 # Пытаемся добиться совпадения через подмену символов
                 attempt = 0
                 max_attempts = 10
-                current_line = search_line
+                current_line = search_line_normalized
                 
-                while attempt < max_attempts and file_line != current_line:
+                while attempt < max_attempts and file_line_normalized != current_line:
                     print(f"Попытка {attempt + 1}")
-                    # Ищем позицию первого несовпадающего символа
-                    min_len = min(len(file_line), len(current_line))
+                    
+                    # Находим позицию первого несовпадающего символа
+                    min_len = min(len(file_line_normalized), len(current_line))
                     mismatch_pos = None
                     for pos in range(min_len):
-                        if file_line[pos] != current_line[pos]:
+                        if file_line_normalized[pos] != current_line[pos]:
                             mismatch_pos = pos
                             break
                     
                     if mismatch_pos is None:
-                        print(f"Разная длина строк")
+                        if len(file_line_normalized) != len(current_line):
+                            print(f"Разная длина строк: файл={len(file_line_normalized)}, diff={len(current_line)}")
                         break
                     
                     diff_char = current_line[mismatch_pos]
-                    file_char = file_line[mismatch_pos]
+                    file_char = file_line_normalized[mismatch_pos]
                     print(f"Несовпадение на позиции {mismatch_pos}: diff='{diff_char}' vs file='{file_char}'")
                     
-                    # Проверяем прямой и обратный порядок подмены
+                    # Проверяем подмену
                     replaced = False
                     for s1, s2 in char_replacements.items():
-                        # Прямая подмена: diff_char -> s2
                         if diff_char == s1 and file_char == s2:
-                            print(f"Прямая подмена: '{s1}' -> '{s2}'")
+                            print(f"Подмена: '{s1}' -> '{s2}'")
+                            # Заменяем символ в оригинальной строке lines (не в нормализованной)
                             line_list = list(lines[start_line + j])
-                            line_list[mismatch_pos] = s2
-                            lines[start_line + j] = ''.join(line_list)
-                            current_line = lines[start_line + j]
-                            replaced = True
-                            break
-                        # Обратная подмена: diff_char -> s1
-                        if diff_char == s2 and file_char == s1:
-                            print(f"Обратная подмена: '{s2}' -> '{s1}'")
-                            line_list = list(lines[start_line + j])
-                            line_list[mismatch_pos] = s1
-                            lines[start_line + j] = ''.join(line_list)
-                            current_line = lines[start_line + j]
-                            replaced = True
-                            break
+                            # Находим позицию в оригинальной строке (может отличаться из-за "| " и пробелов)
+                            orig_pos = mismatch_pos
+                            if lines[start_line + j].startswith('| '):
+                                orig_pos = mismatch_pos + 2
+                            if orig_pos < len(line_list):
+                                line_list[orig_pos] = s2
+                                lines[start_line + j] = ''.join(line_list)
+                                current_line = normalize_line(lines[start_line + j])
+                                replaced = True
+                                break
                     
                     if not replaced:
                         print(f"Нет подходящей подмены")
@@ -2073,18 +2142,30 @@ class AnswerProcessor:
                     
                     attempt += 1
                 
-                if file_line == current_line:
+                if file_line_normalized == current_line:
                     print(f"Подмена успешна, строка обновлена")
                     self._was_changed = True
+                    matched_indices.append(j)
                     continue
                 
                 print(f"Не удалось добиться совпадения")
                 match = False
                 break
             
-            if match:
+            # Если все строки блока совпали
+            if match and len(matched_indices) == block_length:
                 result_line = line_nums[i]
                 print(f"Блок найден! Стартовая строка: {result_line}")
+                
+                # Заменяем все строки search_block в diff на реальные строки из файла
+                print(f"Заменяем строки {start_line}-{start_line + block_length - 1} в diff на строки из файла")
+                for j in range(block_length):
+                    original_file_line = file_lines[i + j]
+                    old_diff_line = lines[start_line + j]
+                    lines[start_line + j] = original_file_line
+                    print(f"  Строка {j}: '{old_diff_line[:50]}' -> '{original_file_line[:50]}'")
+                    self._was_changed = True
+                
                 return result_line
         
         print(f"Блок не найден")
@@ -2167,3 +2248,54 @@ class AnswerProcessor:
             else:
                 print(f"{handlers.Colors.RESET}{line}{handlers.Colors.RESET}")
         print(f"{handlers.Colors.CYAN}{'='*60}{handlers.Colors.RESET}")
+
+    def validate_diff_format(self, diff_lines: List[str]) -> Tuple[bool, List[str]]:
+        """
+        Валидирует формат diff.
+        
+        Ожидаемый формат:
+        1. <<<<<<< SEARCH
+        2. :start_line:N (где N - валидное число, и после числа ничего нет)
+        3. -------
+        4. ... search content ...
+        5. =======
+        6. ... replace content ...
+        7. >>>>>>> REPLACE
+        
+        ======= не может быть на 4 строке (индекс 3)
+        """
+        errors = []
+        
+        if not diff_lines:
+            errors.append("Diff пуст")
+            return False, errors
+        
+        if diff_lines[0] != '<<<<<<< SEARCH':
+            errors.append(f"Строка 1: ожидается '<<<<<<< SEARCH', получено '{diff_lines[0]}'")
+        
+        if not diff_lines[1].startswith(':start_line:'):
+            errors.append(f"Строка 2: ожидается ':start_line:N', получено '{diff_lines[1]}'")
+        else:
+            number_part = diff_lines[1][len(':start_line:'):]
+            if not number_part.isdigit():
+                errors.append(f"Строка 2: после ':start_line:' ожидается число, получено '{number_part}'")
+        
+        if diff_lines[2] != '-------':
+            errors.append(f"Строка 3: ожидается '-------', получено '{diff_lines[2]}'")
+        
+        separator_idx = -1
+        for i, line in enumerate(diff_lines):
+            if line == '=======':
+                separator_idx = i
+                break
+        
+        if separator_idx == -1:
+            errors.append("Отсутствует разделитель '======='")
+        else:
+            if separator_idx == 3:
+                errors.append("Разделитель '=======' не может быть на 4 строке (должен быть хотя бы одна строка SEARCH контента)")
+
+        if diff_lines[-1] != '>>>>>>> REPLACE':
+            errors.append(f"Последняя строка: ожидается '>>>>>>> REPLACE', получено '{diff_lines[-1]}'")
+        
+        return len(errors) == 0, errors
