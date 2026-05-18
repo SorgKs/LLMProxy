@@ -25,7 +25,7 @@ class FixToolApplyDiff:
         """Были ли изменения"""
         return self._was_changed
     
-    def _print_diff_preview(self, lines: List[str], title: str) -> None:
+    def _print_diff(self, lines: List[str], title: str) -> None:
         """Выводит preview diff после каждого шага с цветными маркерами"""
         print(f"\n{handlers.Colors.CYAN}{handlers.Colors.BOLD}{title}{handlers.Colors.RESET}")
         print(f"{handlers.Colors.YELLOW}{'='*60}{handlers.Colors.RESET}")
@@ -43,7 +43,7 @@ class FixToolApplyDiff:
             else:
                 print(f"{handlers.Colors.RESET}{line}{handlers.Colors.RESET}")
     
-    def _fix_apply_diff_deep_search(
+    def _deep_search(
         self, 
         diff: str, 
         file_content: Dict[int, str], 
@@ -67,7 +67,7 @@ class FixToolApplyDiff:
             print(f"\n{handlers.Colors.CYAN}{'='*60}{handlers.Colors.RESET}")
             print(f"{handlers.Colors.BOLD}Deep Search: Анализ проблемного diff{handlers.Colors.RESET}")
             print(f"{handlers.Colors.CYAN}{'='*60}{handlers.Colors.RESET}")
-            self._print_diff_preview(lines, "Исходный diff")
+            self._print_diff(lines, "Исходный diff")
         
         # Фаза 1: Анализ маркеров в diff и извлечение контента
         remaining_lines = lines.copy()
@@ -149,17 +149,17 @@ class FixToolApplyDiff:
                     break
         
         # 1.5 Оставшиеся строки = чистый контент
-        clean_content_lines = remaining_lines
-        clean_content = '\n'.join(clean_content_lines)
+        clean_lines = remaining_lines
+        clean_content = '\n'.join(clean_lines)
         
         if debug:
             print(f"\n{handlers.Colors.YELLOW}Чистый контент (без маркеров):{handlers.Colors.RESET}")
             print(f"{handlers.Colors.YELLOW}{'-'*40}{handlers.Colors.RESET}")
-            for i, line in enumerate(clean_content_lines[:10]):
+            for i, line in enumerate(clean_lines[:10]):
                 repr_line = line.replace(' ', '·').replace('\t', '→')
                 print(f"{i:3}: '{repr_line[:80]}'")
-            if len(clean_content_lines) > 10:
-                print(f"... и еще {len(clean_content_lines) - 10} строк")
+            if len(clean_lines) > 10:
+                print(f"... и еще {len(clean_lines) - 10} строк")
             print(f"{handlers.Colors.YELLOW}{'-'*40}{handlers.Colors.RESET}")
         
         # Фаза 2: Поиск в файле
@@ -168,15 +168,15 @@ class FixToolApplyDiff:
             return None, issues
         
         # Берем первые 3 строки из чистого контента (как есть, включая пустые, сохраняя пробелы)
-        search_start_lines = clean_content_lines[:3]
+        search_prefix = clean_lines[:3]
         
-        if not search_start_lines:
+        if not search_prefix:
             issues.append("Чистый контент пуст")
             return None, issues
         
         if debug:
             print(f"\n{handlers.Colors.CYAN}Поиск в файле первых 3 строк SEARCH блока:{handlers.Colors.RESET}")
-            for i, line in enumerate(search_start_lines):
+            for i, line in enumerate(search_prefix):
                 repr_line = line.replace(' ', '·').replace('\t', '→')
                 print(f"  {i+1}: '{repr_line[:80]}'")
         
@@ -185,11 +185,11 @@ class FixToolApplyDiff:
         found_position = None
         whitespace_warning = False
         
-        for i in range(len(file_lines_list) - len(search_start_lines) + 1):
+        for i in range(len(file_lines_list) - len(search_prefix) + 1):
             match = True
             trim_match = True
             
-            for j, search_line in enumerate(search_start_lines):
+            for j, search_line in enumerate(search_prefix):
                 if i + j >= len(file_lines_list):
                     match = False
                     trim_match = False
@@ -220,7 +220,7 @@ class FixToolApplyDiff:
                 whitespace_warning = True
                 if debug:
                     print(f"{handlers.Colors.YELLOW}⚠ На позиции {i}: trim версии совпадают, но есть различия в пробелах{handlers.Colors.RESET}")
-                    for j, search_line in enumerate(search_start_lines[:2]):
+                    for j, search_line in enumerate(search_prefix[:2]):
                         if i + j < len(file_lines_list):
                             file_line = file_lines_list[i + j]
                             print(f"    Файл:   '{file_line.replace(' ', '·').replace('\t', '→')[:60]}'")
@@ -241,9 +241,9 @@ class FixToolApplyDiff:
         if debug:
             print(f"\n{handlers.Colors.CYAN}Поиск расхождения:{handlers.Colors.RESET}")
         
-        while file_idx < len(file_lines_list) and content_idx < len(clean_content_lines):
+        while file_idx < len(file_lines_list) and content_idx < len(clean_lines):
             file_line = file_lines_list[file_idx]
-            content_line = clean_content_lines[content_idx]
+            content_line = clean_lines[content_idx]
             
             if debug:
                 file_repr = file_line.replace(' ', '·').replace('\t', '→')[:50]
@@ -254,8 +254,8 @@ class FixToolApplyDiff:
                 if debug:
                     print(f"{handlers.Colors.YELLOW}⚠ Расхождение на позиции {content_idx}{handlers.Colors.RESET}")
                 
-                if content_idx < len(clean_content_lines):
-                    potential_separator = clean_content_lines[content_idx].strip()
+                if content_idx < len(clean_lines):
+                    potential_separator = clean_lines[content_idx].strip()
                     for pattern in separator_patterns:
                         if re.match(pattern, potential_separator):
                             true_separator = potential_separator
@@ -266,7 +266,7 @@ class FixToolApplyDiff:
                             break
                 
                 if true_separator is None:
-                    issues.append(f"ОШИБКА: В месте расхождения нет разделителя (строка: '{clean_content_lines[content_idx][:50]}')")
+                    issues.append(f"ОШИБКА: В месте расхождения нет разделителя (строка: '{clean_lines[content_idx][:50]}')")
                     return None, issues
                 
                 break
@@ -279,8 +279,8 @@ class FixToolApplyDiff:
             return None, issues
         
         # Фаза 4: Пересборка diff с экранированием ложных маркеров
-        search_content_lines = clean_content_lines[:true_separator_pos]
-        replace_content_lines = clean_content_lines[true_separator_pos + 1:] if true_separator_pos + 1 < len(clean_content_lines) else []
+        search_content_lines = clean_lines[:true_separator_pos]
+        replace_content_lines = clean_lines[true_separator_pos + 1:] if true_separator_pos + 1 < len(clean_lines) else []
         
         if debug:
             print(f"\n{handlers.Colors.CYAN}Разделение контента:{handlers.Colors.RESET}")
@@ -338,7 +338,7 @@ class FixToolApplyDiff:
         
         if debug:
             print(f"\n{handlers.Colors.GREEN}{handlers.Colors.BOLD}Финальный diff после deep_search:{handlers.Colors.RESET}")
-            self._print_diff_preview(final_lines, "Deep Search Result")
+            self._print_diff(final_lines, "Deep Search Result")
             print(f"\n{handlers.Colors.YELLOW}Проблемы и исправления:{handlers.Colors.RESET}")
             for issue in issues:
                 print(f"  • {issue}")
@@ -502,7 +502,7 @@ class FixToolApplyDiff:
                 print(f"{handlers.Colors.YELLOW}⚠ Обнаружено {separator_count} разделителей, вызываем deep_search{handlers.Colors.RESET}")
             
             file_content = data.get("content", {}) if data and data.get("type") == "file_content" else {}
-            final_diff, issues = self._fix_apply_diff_deep_search(diff, file_content, debug)
+            final_diff, issues = self._deep_search(diff, file_content, debug)
             
             if final_diff:
                 tc['function']['arguments']['diff'] = final_diff
