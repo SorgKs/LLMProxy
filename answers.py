@@ -12,6 +12,7 @@ from typing import List, Dict, Any, Tuple, Optional
 
 from fix_tool_apply_diff import FixToolApplyDiff
 from fix_tool_function_replace import FixToolFunctionReplace
+from fix_tool_read_file import FixToolReadFile
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,7 @@ class AnswerProcessor:
         self.progress = {}
         self._fix_tool_apply_diff = FixToolApplyDiff()
         self._fix_tool_function_replace = FixToolFunctionReplace()
+        self._fix_tool_read_file = FixToolReadFile()
         
         # Загружаем конфигурацию инструментов
         self.tools_config = self._load_tools_config(config_path)
@@ -197,6 +199,7 @@ class AnswerProcessor:
         self.changes_log = []
         self.progress = {}
         self._fix_tool_apply_diff.reset()
+        self._fix_tool_read_file.reset()
 
     def _decode_unicode_escapes(self, text: str) -> str:
         """
@@ -623,12 +626,10 @@ class AnswerProcessor:
                     data=func['arguments'],
                     fields=['path']
                 )
-                if self._add_mode_slice_to_read_file(parsed_args):
+                fix_changed, fix_changes = self._fix_tool_read_file.fix(tc)
+                if fix_changed:
                     changed = True
-                    changes.append("read_file: добавлен mode=slice")
-                if self._fix_read_file_offset(parsed_args):
-                    changed = True
-                    changes.append("read_file: offset исправлен с 0 на 1")
+                    changes.extend(fix_changes)
         
             if tool_name == "apply_diff":
                 handlers.validate_fields(
@@ -1190,36 +1191,6 @@ class AnswerProcessor:
     def _normalize_follow_up_array(self, arr: list) -> list:
         """Преобразует массив строк в массив объектов {text: "...", mode: null}"""
         return [{"text": item, "mode": None} for item in arr]
-
-    def _add_mode_slice_to_read_file(self, parsed_args: dict) -> bool:
-        """
-        Добавляет mode=slice в read_file.
-        
-        Args:
-            parsed_args: Dict с аргументами (уже распарсенными)
-            
-        Returns:
-            True если были изменения, иначе False
-        """
-        if "mode" not in parsed_args:
-            parsed_args["mode"] = "slice"
-            return True
-        return False
-
-    def _fix_read_file_offset(self, parsed_args: dict) -> bool:
-        """
-        Исправляет offset с 0 на 1 в read_file.
-        
-        Args:
-            parsed_args: Dict с аргументами (уже распарсенными)
-            
-        Returns:
-            True если были изменения, иначе False
-        """
-        if "offset" in parsed_args and parsed_args["offset"] == 0:
-            parsed_args["offset"] = 1
-            return True
-        return False
 
     def _fix_empty_path(self, parsed_args: dict, tool_name: str) -> bool:
         """

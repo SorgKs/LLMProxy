@@ -306,6 +306,42 @@ async def proxy_chat_completions(request: Request):
     correction_attempt = 0
     process_duration_ms = 0
 
+    # ✅ ПРОВЕРКА И СБРОС _process_request_pending (если пришел новый запрос, а не ответ на ожидаемый)
+    if _process_request_pending:
+        pending_path = _process_request_pending.get("path")
+        logger.debug(f"[DEBUG proxy_chat_completions] Проверка _process_request_pending: path={pending_path}")
+        
+        # Проверяем, содержит ли последнее сообщение ответ read_file с требуемым файлом
+        _is_response_to_pending = False
+        messages = body.get("messages", [])
+        if messages:
+            last_msg = messages[-1]
+            if last_msg.get("role") == "tool":
+                tool_call_id = last_msg.get("tool_call_id")
+                # Ищем соответствующий tool call с read_file
+                for msg in messages:
+                    if msg.get("role") == "assistant" and "tool_calls" in msg:
+                        for tc in msg.get("tool_calls", []):
+                            if tc.get("id") == tool_call_id:
+                                func = tc.get("function", {})
+                                if func.get("name") == "read_file":
+                                    args = func.get("arguments", {})
+                                    if isinstance(args, str):
+                                        try:
+                                            args = json.loads(args)
+                                        except (json.JSONDecodeError, TypeError):
+                                            continue
+                                    if isinstance(args, dict) and args.get("path") == pending_path:
+                                        _is_response_to_pending = True
+                                        logger.debug(f"[DEBUG proxy_chat_completions] Последнее сообщение содержит read_file для {pending_path}")
+                                        break
+                        if _is_response_to_pending:
+                            break
+        
+        if not _is_response_to_pending:
+            logger.info(f"[DEBUG proxy_chat_completions] Сброс _process_request_pending: новый запрос, а не ответ на ожидаемый файл {pending_path}")
+            _process_request_pending = {}
+
     # Цикл self-correction (отправка НОВЫХ запросов при невалидных tool calls)
     while correction_attempt <= max_corrections:
         logger.debug(f"[DEBUG proxy_chat_completions] While start")
