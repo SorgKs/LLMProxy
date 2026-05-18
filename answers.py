@@ -13,6 +13,7 @@ from typing import List, Dict, Any, Tuple, Optional
 from fix_tool_apply_diff import FixToolApplyDiff
 from fix_tool_function_replace import FixToolFunctionReplace
 from fix_tool_read_file import FixToolReadFile
+from fix_tool_ask_followup_question import FixToolAskFollowupQuestion
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ class AnswerProcessor:
         self._fix_tool_apply_diff = FixToolApplyDiff()
         self._fix_tool_function_replace = FixToolFunctionReplace()
         self._fix_tool_read_file = FixToolReadFile()
+        self._fix_tool_ask_followup_question = FixToolAskFollowupQuestion()
         
         # Загружаем конфигурацию инструментов
         self.tools_config = self._load_tools_config(config_path)
@@ -200,6 +202,7 @@ class AnswerProcessor:
         self.progress = {}
         self._fix_tool_apply_diff.reset()
         self._fix_tool_read_file.reset()
+        self._fix_tool_ask_followup_question.reset()
 
     def _decode_unicode_escapes(self, text: str) -> str:
         """
@@ -681,7 +684,7 @@ class AnswerProcessor:
                     data=func['arguments'],
                     fields=['question', 'follow_up']
                 )
-                if self._fix_followup_question(parsed_args):
+                if self._fix_tool_ask_followup_question.fix(parsed_args):
                     changed = True
                     changes.append("ask_followup_question: follow_up строка -> массив")
             
@@ -1157,40 +1160,6 @@ class AnswerProcessor:
         answer.content = answer.content.strip()
         
         return found
-
-    def _fix_followup_question(self, parsed_args: dict) -> bool:
-        """
-        Исправляет follow_up в ask_followup_question.
-        
-        Преобразует:
-        1. Строку с JSON-массивом -> массив объектов
-        2. Массив строк -> массив объектов {text: "...", mode: null}
-        """
-        if "follow_up" not in parsed_args:
-            return False
-        
-        follow_up = parsed_args["follow_up"]
-        
-        # Case 1: это строка с JSON
-        if isinstance(follow_up, str):
-            try:
-                parsed = json.loads(follow_up)
-                if isinstance(parsed, list):
-                    parsed_args["follow_up"] = self._normalize_follow_up_array(parsed)
-                    return True
-            except json.JSONDecodeError:
-                pass
-        
-        # Case 2: это массив строк
-        elif isinstance(follow_up, list) and follow_up and isinstance(follow_up[0], str):
-            parsed_args["follow_up"] = self._normalize_follow_up_array(follow_up)
-            return True
-        
-        return False
-
-    def _normalize_follow_up_array(self, arr: list) -> list:
-        """Преобразует массив строк в массив объектов {text: "...", mode: null}"""
-        return [{"text": item, "mode": None} for item in arr]
 
     def _fix_empty_path(self, parsed_args: dict, tool_name: str) -> bool:
         """
