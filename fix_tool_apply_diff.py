@@ -4,11 +4,88 @@
 """
 import re
 import logging
+import os
+import glob
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple, Any
 
 import handlers
 
 logger = logging.getLogger(__name__)
+
+# Директория для логов ошибок
+ERROR_LOG_DIR = "logs"
+os.makedirs(ERROR_LOG_DIR, exist_ok=True)
+
+# Ограничения для файлов логов
+MAX_LOG_FILES = 20
+MAX_LOG_AGE_HOURS = 24
+
+
+def _cleanup_old_log_files():
+    """
+    Удаляет старые лог-файлы ошибок.
+    Оставляет не более MAX_LOG_FILES файлов и не старше MAX_LOG_AGE_HOURS часов.
+    """
+    try:
+        pattern = os.path.join(ERROR_LOG_DIR, "apply_diff_error_*.log")
+        files = glob.glob(pattern)
+        
+        if not files:
+            return
+        
+        # Сортируем по времени модификации (новые первые)
+        files.sort(key=os.path.getmtime, reverse=True)
+        
+        # Удаляем файлы сверх лимита
+        if len(files) > MAX_LOG_FILES:
+            for f in files[MAX_LOG_FILES:]:
+                try:
+                    os.remove(f)
+                except OSError:
+                    pass
+        
+        # Удаляем файлы старше MAX_LOG_AGE_HOURS
+        cutoff_time = datetime.now() - timedelta(hours=MAX_LOG_AGE_HOURS)
+        for f in files[:MAX_LOG_FILES]:
+            try:
+                file_mtime = datetime.fromtimestamp(os.path.getmtime(f))
+                if file_mtime < cutoff_time:
+                    os.remove(f)
+            except OSError:
+                pass
+    except Exception as e:
+        logger.error(f"Ошибка при очистке лог-файлов: {e}")
+
+
+def _dump_log_to_file(log_buffer: List[str], prefix: str = "apply_diff_error"):
+    """
+    Сбрасывает содержимое лог-буфера в файл с datetime в имени.
+    
+    Args:
+        log_buffer: Буфер лога для записи
+        prefix: Префикс имени файла
+    """
+    if not log_buffer:
+        return
+    
+    try:
+        # Очищаем старые файлы перед созданием нового
+        _cleanup_old_log_files()
+        
+        # Формируем имя файла с datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        filename = f"{prefix}_{timestamp}.log"
+        filepath = os.path.join(ERROR_LOG_DIR, filename)
+        
+        # Записываем содержимое буфера в файл
+        with open(filepath, "w", encoding="utf-8") as f:
+            f.write('\n'.join(log_buffer))
+            f.write('\n')
+        
+        logger.info(f"Лог ошибок записан в файл: {filepath}")
+    except Exception as e:
+        logger.error(f"Ошибка при записи лога в файл: {e}")
 
 
 class FixToolApplyDiff:
@@ -19,29 +96,76 @@ class FixToolApplyDiff:
     
     def __init__(self):
         self._was_changed = False
+        self._log_buffer: List[str] = []
     
     @property
     def changed(self) -> bool:
         """Были ли изменения"""
         return self._was_changed
     
+    @property
+    def log(self) -> str:
+        """Возвращает содержимое лог-буфера как строку"""
+        return '\n'.join(self._log_buffer)
+    
+    @property
+    def log_lines(self) -> List[str]:
+        """Возвращает копию лог-буфера как список строк"""
+        return self._log_buffer.copy()
+    
+    def _log(self, message: str, level: str = "DEBUG"):
+        """
+        Внутренний метод логирования.
+        Пишет в буфер и в logger (для всех уровней).
+        
+        Args:
+            message: Сообщение для логирования
+            level: Уровень логирования (DEBUG, INFO, WARNING, ERROR)
+        """
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
+        formatted_message = f"[{timestamp}] [{level}] {message}"
+        
+        # Добавляем в буфер
+        self._log_buffer.append(formatted_message)
+        
+        # Также пишем в logger в зависимости от уровня
+        level_upper = level.upper()
+        if level_upper == "DEBUG":
+            logger.debug(message)
+        elif level_upper == "INFO":
+            logger.info(message)
+        elif level_upper == "WARNING":
+            logger.warning(message)
+        elif level_upper == "ERROR":
+            logger.error(message)
+        else:
+            logger.debug(message)
+    
+    def _log_colored(self, message: str, color: str = "", level: str = "DEBUG"):
+        """
+        Логирование с цветным форматированием (для обратной совместимости).
+        Цвет игнорируется в буфере, но используется для консоли через logger.
+        
+        Args:
+            message: Сообщение для логирования
+            color: Цветовой код (игнорируется в буфере)
+            level: Уровень логирования
+        """
+        self._log(message, level)
+    
+    def _dump_log_on_error(self):
+        """
+        Сбрасывает лог в файл при ошибке.
+        """
+        if self._log_buffer:
+            _dump_log_to_file(self._log_buffer)
+    
     def _print_diff(self, lines: List[str], title: str) -> None:
-        """Выводит preview diff после каждого шага с цветными маркерами"""
-        print(f"\n{handlers.Colors.CYAN}{handlers.Colors.BOLD}{title}{handlers.Colors.RESET}")
-        print(f"{handlers.Colors.YELLOW}{'='*60}{handlers.Colors.RESET}")
+        """Выводит preview diff после каждого шага"""
+        self._log(f"\n{title}")
+        self._log("=" * 60)
         for i, line in enumerate(lines):
-            if line.startswith('<<<<<<< SEARCH'):
-                print(f"{handlers.Colors.GREEN}{line}{handlers.Colors.RESET}")
-            elif line.startswith('======='):
-                print(f"{handlers.Colors.YELLOW}{line}{handlers.Colors.RESET}")
-            elif line.startswith('>>>>>>> REPLACE'):
-                print(f"{handlers.Colors.RED}{line}{handlers.Colors.RESET}")
-            elif line.startswith('-------'):
-                print(f"{handlers.Colors.BLUE}{line}{handlers.Colors.RESET}")
-            elif line.startswith(':start_line:'):
-                print(f"{handlers.Colors.MAGENTA}{line}{handlers.Colors.RESET}")
-            else:
-                print(f"{handlers.Colors.RESET}{line}{handlers.Colors.RESET}")
+            self._log(line)
     
     def _deep_search(
         self, 
@@ -64,9 +188,9 @@ class FixToolApplyDiff:
         lines = diff.split('\n')
         
         if debug:
-            print(f"\n{handlers.Colors.CYAN}{'='*60}{handlers.Colors.RESET}")
-            print(f"{handlers.Colors.BOLD}Deep Search: Анализ проблемного diff{handlers.Colors.RESET}")
-            print(f"{handlers.Colors.CYAN}{'='*60}{handlers.Colors.RESET}")
+            self._log("\n" + "=" * 60)
+            self._log("Deep Search: Анализ проблемного diff")
+            self._log("=" * 60)
             self._print_diff(lines, "Исходный diff")
         
         # Фаза 1: Анализ маркеров в diff и извлечение контента
@@ -108,7 +232,7 @@ class FixToolApplyDiff:
                     start_marker = remaining_lines.pop(0)
                     issues.append(f"Найден стартовый маркер: {start_marker[:50]}")
                     if debug:
-                        print(f"{handlers.Colors.GREEN}✓ Стартовый маркер: {start_marker[:50]}{handlers.Colors.RESET}")
+                        self._log(f"✓ Стартовый маркер: {start_marker[:50]}")
                     break
         
         # 1.2 Поиск маркера номера строки (строго следующая строка после стартового маркера)
@@ -123,7 +247,7 @@ class FixToolApplyDiff:
                 line_number = match.group(2) if match.group(2) else None
                 issues.append(f"Найден маркер строки: {line_marker[:50]}, значение: {line_number}")
                 if debug:
-                    print(f"{handlers.Colors.MAGENTA}✓ Маркер строки: {line_marker[:50]}{handlers.Colors.RESET}")
+                    self._log(f"✓ Маркер строки: {line_marker[:50]}")
                 
                 # 1.3 Поиск разделителя после маркера строки (строго следующая строка)
                 if remaining_lines:
@@ -133,7 +257,7 @@ class FixToolApplyDiff:
                             separator_after_line = remaining_lines.pop(0)
                             issues.append(f"Найден разделитель после маркера: {separator_after_line}")
                             if debug:
-                                print(f"{handlers.Colors.BLUE}✓ Разделитель после маркера: {separator_after_line}{handlers.Colors.RESET}")
+                                self._log(f"✓ Разделитель после маркера: {separator_after_line}")
                             break
         
         # 1.4 Поиск финального маркера (последняя строка)
@@ -145,7 +269,7 @@ class FixToolApplyDiff:
                     end_marker = remaining_lines.pop()
                     issues.append(f"Найден финальный маркер: {end_marker[:50]}")
                     if debug:
-                        print(f"{handlers.Colors.RED}✓ Финальный маркер: {end_marker[:50]}{handlers.Colors.RESET}")
+                        self._log(f"✓ Финальный маркер: {end_marker[:50]}")
                     break
         
         # 1.5 Оставшиеся строки = чистый контент
@@ -153,18 +277,19 @@ class FixToolApplyDiff:
         clean_content = '\n'.join(clean_lines)
         
         if debug:
-            print(f"\n{handlers.Colors.YELLOW}Чистый контент (без маркеров):{handlers.Colors.RESET}")
-            print(f"{handlers.Colors.YELLOW}{'-'*40}{handlers.Colors.RESET}")
+            self._log("\nЧистый контент (без маркеров):")
+            self._log("-" * 40)
             for i, line in enumerate(clean_lines[:10]):
                 repr_line = line.replace(' ', '·').replace('\t', '→')
-                print(f"{i:3}: '{repr_line[:80]}'")
+                self._log(f"{i:3}: '{repr_line[:80]}'")
             if len(clean_lines) > 10:
-                print(f"... и еще {len(clean_lines) - 10} строк")
-            print(f"{handlers.Colors.YELLOW}{'-'*40}{handlers.Colors.RESET}")
+                self._log(f"... и еще {len(clean_lines) - 10} строк")
+            self._log("-" * 40)
         
         # Фаза 2: Поиск в файле
         if not file_content:
             issues.append("Нет содержимого файла для верификации")
+            self._log("Нет содержимого файла для верификации", "ERROR")
             return None, issues
         
         # Берем первые 3 строки из чистого контента (как есть, включая пустые, сохраняя пробелы)
@@ -172,13 +297,14 @@ class FixToolApplyDiff:
         
         if not search_prefix:
             issues.append("Чистый контент пуст")
+            self._log("Чистый контент пуст", "ERROR")
             return None, issues
         
         if debug:
-            print(f"\n{handlers.Colors.CYAN}Поиск в файле первых 3 строк SEARCH блока:{handlers.Colors.RESET}")
+            self._log("\nПоиск в файле первых 3 строк SEARCH блока:")
             for i, line in enumerate(search_prefix):
                 repr_line = line.replace(' ', '·').replace('\t', '→')
-                print(f"  {i+1}: '{repr_line[:80]}'")
+                self._log(f"  {i+1}: '{repr_line[:80]}'")
         
         # Ищем эти строки в файле
         file_lines_list = [file_content[k] for k in sorted(file_content.keys())]
@@ -212,24 +338,25 @@ class FixToolApplyDiff:
             if match:
                 found_position = i
                 if debug:
-                    print(f"{handlers.Colors.GREEN}✓ Найдено ТОЧНОЕ совпадение на позиции {i} (строка {i+1} в файле){handlers.Colors.RESET}")
+                    self._log(f"✓ Найдено ТОЧНОЕ совпадение на позиции {i} (строка {i+1} в файле)")
                 break
             
             # Если точного нет, но trim совпал - запоминаем для предупреждения
             if trim_match and not match:
                 whitespace_warning = True
                 if debug:
-                    print(f"{handlers.Colors.YELLOW}⚠ На позиции {i}: trim версии совпадают, но есть различия в пробелах{handlers.Colors.RESET}")
+                    self._log(f"⚠ На позиции {i}: trim версии совпадают, но есть различия в пробелах")
                     for j, search_line in enumerate(search_prefix[:2]):
                         if i + j < len(file_lines_list):
                             file_line = file_lines_list[i + j]
-                            print(f"    Файл:   '{file_line.replace(' ', '·').replace('\t', '→')[:60]}'")
-                            print(f"    Diff:   '{search_line.replace(' ', '·').replace('\t', '→')[:60]}'")
+                            self._log(f"    Файл:   '{file_line.replace(' ', '·').replace('\t', '→')[:60]}'")
+                            self._log(f"    Diff:   '{search_line.replace(' ', '·').replace('\t', '→')[:60]}'")
         
         if found_position is None:
             issues.append("Не удалось найти начало SEARCH блока в файле")
             if whitespace_warning:
                 issues.append("ПРЕДУПРЕЖДЕНИЕ: Найдены совпадения trim-версий, но различия в пробелах")
+            self._log("Не удалось найти начало SEARCH блока в файле", "ERROR")
             return None, issues
         
         # Фаза 3: Поиск истинного разделителя
@@ -239,7 +366,7 @@ class FixToolApplyDiff:
         true_separator_pos = None
         
         if debug:
-            print(f"\n{handlers.Colors.CYAN}Поиск расхождения:{handlers.Colors.RESET}")
+            self._log("\nПоиск расхождения:")
         
         while file_idx < len(file_lines_list) and content_idx < len(clean_lines):
             file_line = file_lines_list[file_idx]
@@ -248,11 +375,11 @@ class FixToolApplyDiff:
             if debug:
                 file_repr = file_line.replace(' ', '·').replace('\t', '→')[:50]
                 content_repr = content_line.replace(' ', '·').replace('\t', '→')[:50]
-                print(f"  Сравнение: файл[{file_idx}]='{file_repr}' vs контент[{content_idx}]='{content_repr}'")
+                self._log(f"  Сравнение: файл[{file_idx}]='{file_repr}' vs контент[{content_idx}]='{content_repr}'")
             
             if file_line != content_line:
                 if debug:
-                    print(f"{handlers.Colors.YELLOW}⚠ Расхождение на позиции {content_idx}{handlers.Colors.RESET}")
+                    self._log(f"⚠ Расхождение на позиции {content_idx}")
                 
                 if content_idx < len(clean_lines):
                     potential_separator = clean_lines[content_idx].strip()
@@ -262,11 +389,12 @@ class FixToolApplyDiff:
                             true_separator_pos = content_idx
                             issues.append(f"Найден истинный разделитель: {true_separator} на позиции {true_separator_pos}")
                             if debug:
-                                print(f"{handlers.Colors.GREEN}✓ Истинный разделитель: {true_separator}{handlers.Colors.RESET}")
+                                self._log(f"✓ Истинный разделитель: {true_separator}")
                             break
                 
                 if true_separator is None:
                     issues.append(f"ОШИБКА: В месте расхождения нет разделителя (строка: '{clean_lines[content_idx][:50]}')")
+                    self._log(f"ОШИБКА: В месте расхождения нет разделителя (строка: '{clean_lines[content_idx][:50]}')", "ERROR")
                     return None, issues
                 
                 break
@@ -276,6 +404,7 @@ class FixToolApplyDiff:
         
         if true_separator is None:
             issues.append("Не удалось найти истинный разделитель (достигнут конец файла или контента)")
+            self._log("Не удалось найти истинный разделитель (достигнут конец файла или контента)", "ERROR")
             return None, issues
         
         # Фаза 4: Пересборка diff с экранированием ложных маркеров
@@ -283,10 +412,10 @@ class FixToolApplyDiff:
         replace_content_lines = clean_lines[true_separator_pos + 1:] if true_separator_pos + 1 < len(clean_lines) else []
         
         if debug:
-            print(f"\n{handlers.Colors.CYAN}Разделение контента:{handlers.Colors.RESET}")
-            print(f"  SEARCH блок: {len(search_content_lines)} строк")
-            print(f"  REPLACE блок: {len(replace_content_lines)} строк")
-            print(f"  Истинный разделитель: '{true_separator}'")
+            self._log("\nРазделение контента:")
+            self._log(f"  SEARCH блок: {len(search_content_lines)} строк")
+            self._log(f"  REPLACE блок: {len(replace_content_lines)} строк")
+            self._log(f"  Истинный разделитель: '{true_separator}'")
         
         def escape_fake_markers(lines_list: List[str]) -> List[str]:
             fake_patterns = [
@@ -337,11 +466,11 @@ class FixToolApplyDiff:
         final_diff = '\n'.join(final_lines)
         
         if debug:
-            print(f"\n{handlers.Colors.GREEN}{handlers.Colors.BOLD}Финальный diff после deep_search:{handlers.Colors.RESET}")
+            self._log("\nФинальный diff после deep_search:")
             self._print_diff(final_lines, "Deep Search Result")
-            print(f"\n{handlers.Colors.YELLOW}Проблемы и исправления:{handlers.Colors.RESET}")
+            self._log("\nПроблемы и исправления:")
             for issue in issues:
-                print(f"  • {issue}")
+                self._log(f"  • {issue}")
         
         return final_diff, issues
     
@@ -488,140 +617,153 @@ class FixToolApplyDiff:
         changed = False
         final_diff = None
         
-        diff = tc['function']['arguments']['diff']
-        lines = diff.split('\n')
-        separator_count = 0
-        separator_pattern = re.compile(r'^[=<>-]{3,}$|^<<<<<<<|^>>>>>>>|^=======$|^-------$', re.IGNORECASE)
-        
-        for line in lines:
-            if separator_pattern.match(line.strip()):
-                separator_count += 1
-        
-        if separator_count > 6:
-            if debug:
-                print(f"{handlers.Colors.YELLOW}⚠ Обнаружено {separator_count} разделителей, вызываем deep_search{handlers.Colors.RESET}")
+        try:
+            diff = tc['function']['arguments']['diff']
+            lines = diff.split('\n')
+            separator_count = 0
+            separator_pattern = re.compile(r'^[=<>-]{3,}$|^<<<<<<<|^>>>>>>>|^=======$|^-------$', re.IGNORECASE)
             
-            file_content = data.get("content", {}) if data and data.get("type") == "file_content" else {}
-            final_diff, issues = self._deep_search(diff, file_content, debug)
+            for line in lines:
+                if separator_pattern.match(line.strip()):
+                    separator_count += 1
             
-            if final_diff:
-                tc['function']['arguments']['diff'] = final_diff
+            if separator_count > 6:
+                if debug:
+                    self._log(f"⚠ Обнаружено {separator_count} разделителей, вызываем deep_search")
+                
+                file_content = data.get("content", {}) if data and data.get("type") == "file_content" else {}
+                final_diff, issues = self._deep_search(diff, file_content, debug)
+                
+                if final_diff:
+                    tc['function']['arguments']['diff'] = final_diff
+                    changed = True
+                    self._was_changed = True
+                else:
+                    # Ошибка в deep_search - сбрасываем лог
+                    self._log("deep_search не смог исправить diff", "ERROR")
+                    self._dump_log_on_error()
+                
+                return changed, final_diff
+            
+            if data and data.get("content"):
+                if not all(isinstance(k, int) for k in data['content'].keys()):
+                    self._log("Ключи content не int, пропускаем", "WARNING")
+                    return changed, final_diff
+            
+            diff = tc['function']['arguments']['diff']
+            lines = diff.split('\n')
+            
+            start_patterns = [
+                r'^[\[\]<>=-]*\s*(?:SEARCH|SOURCE|SRC|REPLACE)\s*[\[\]<>=-]*$',
+                r'^[\[\]<>=-]+$',
+                r'^:(start|end)_line:',
+            ]
+            
+            separator_indices = []
+            for i, line in enumerate(lines):
+                line_stripped = line.strip()
+                for pattern in start_patterns:
+                    if re.match(pattern, line_stripped):
+                        if debug and line_stripped != '=======':
+                            self._log(f"  Заменяем разделитель на строке {i}: '{line_stripped}' -> '======='")
+                        lines[i] = '======='
+                        changed = True
+                        separator_indices.append(i)
+                        break
+            
+            i = 0
+            while i < len(separator_indices) - 1:
+                if separator_indices[i+1] == separator_indices[i] + 1:
+                    if debug:
+                        self._log(f"  Удаляем дублирующийся разделитель на строке {separator_indices[i]}")
+                    del lines[separator_indices[i]]
+                    for j in range(i+1, len(separator_indices)):
+                        separator_indices[j] -= 1
+                    del separator_indices[i]
+                    changed = True
+                else:
+                    i += 1
+            
+            if not separator_indices or separator_indices[0] != 0:
+                if debug:
+                    self._log("  Добавляем разделитель в начало")
+                lines.insert(0, '=======')
+                separator_indices = [i+1 for i in separator_indices]
+                separator_indices.insert(0, 0)
                 changed = True
+            
+            if not separator_indices or separator_indices[-1] != len(lines) - 1:
+                if debug:
+                    self._log("  Добавляем разделитель в конец")
+                lines.append('=======')
+                separator_indices.append(len(lines) - 1)
+                changed = True
+            
+            if len(separator_indices) == 3:
+                if debug:
+                    self._log("  Обнаружено 3 разделителя, добавляем :start_line: и разделитель")
+                lines.insert(separator_indices[0] + 1, ':start_line:1')
+                lines.insert(separator_indices[0] + 2, '-------')
+                separator_indices = [
+                    separator_indices[0],
+                    separator_indices[0] + 2,
+                    separator_indices[1] + 2,
+                    separator_indices[2] + 2
+                ]
+                changed = True
+            
+            if len(separator_indices) != 4:
+                if debug:
+                    self._log(f"❌ Ошибка: найдено {len(separator_indices)} разделителей, нужно 4")
+                self._log(f"Ошибка: найдено {len(separator_indices)} разделителей, нужно 4", "ERROR")
+                self._dump_log_on_error()
+                return changed, final_diff
+            
+            lines[separator_indices[0]] = '<<<<<<< SEARCH'
+            
+            lines[separator_indices[1]] = '-------'
+            search_block = [separator_indices[1]+1, separator_indices[2]-separator_indices[1]-1]
+            
+            lines[separator_indices[2]] = '======='
+            
+            try:
+                lines[separator_indices[3]] = '>>>>>>> REPLACE'
+            except Exception:
+                pass
+            
+            try:
+                j = separator_indices[3] - 1
+                while j > separator_indices[2] and not lines[j].strip():
+                    del lines[j]
+                    separator_indices[3] -= 1
+                    j -= 1
+                    changed = True
+            except Exception:
+                pass
+            
+            if data and data.get('content'):
+                file_content = data['content']
+                if search_block:
+                    actual_line = self._find_search_block_line(file_content, lines, tuple(search_block))
+                    if actual_line is not None:
+                        for idx, line in enumerate(lines):
+                            if line.strip().startswith(':start_line:'):
+                                lines[idx] = f':start_line:{actual_line}'
+                                changed = True
+                                break
+            
+            tc['function']['arguments']['diff'] = '\n'.join(lines)
+            final_diff = '\n'.join(lines)
+            
+            if changed:
                 self._was_changed = True
             
             return changed, final_diff
-        
-        if data and data.get("content"):
-            if not all(isinstance(k, int) for k in data['content'].keys()):
-                return changed, final_diff
-        
-        diff = tc['function']['arguments']['diff']
-        lines = diff.split('\n')
-        
-        start_patterns = [
-            r'^[\[\]<>=-]*\s*(?:SEARCH|SOURCE|SRC|REPLACE)\s*[\[\]<>=-]*$',
-            r'^[\[\]<>=-]+$',
-            r'^:(start|end)_line:',
-        ]
-        
-        separator_indices = []
-        for i, line in enumerate(lines):
-            line_stripped = line.strip()
-            for pattern in start_patterns:
-                if re.match(pattern, line_stripped):
-                    if debug and line_stripped != '=======':
-                        print(f"  Заменяем разделитель на строке {i}: '{line_stripped}' -> '======='")
-                    lines[i] = '======='
-                    changed = True
-                    separator_indices.append(i)
-                    break
-        
-        i = 0
-        while i < len(separator_indices) - 1:
-            if separator_indices[i+1] == separator_indices[i] + 1:
-                if debug:
-                    print(f"  Удаляем дублирующийся разделитель на строке {separator_indices[i]}")
-                del lines[separator_indices[i]]
-                for j in range(i+1, len(separator_indices)):
-                    separator_indices[j] -= 1
-                del separator_indices[i]
-                changed = True
-            else:
-                i += 1
-        
-        if not separator_indices or separator_indices[0] != 0:
-            if debug:
-                print("  Добавляем разделитель в начало")
-            lines.insert(0, '=======')
-            separator_indices = [i+1 for i in separator_indices]
-            separator_indices.insert(0, 0)
-            changed = True
-        
-        if not separator_indices or separator_indices[-1] != len(lines) - 1:
-            if debug:
-                print("  Добавляем разделитель в конец")
-            lines.append('=======')
-            separator_indices.append(len(lines) - 1)
-            changed = True
-        
-        if len(separator_indices) == 3:
-            if debug:
-                print("  Обнаружено 3 разделителя, добавляем :start_line: и разделитель")
-            lines.insert(separator_indices[0] + 1, ':start_line:1')
-            lines.insert(separator_indices[0] + 2, '-------')
-            separator_indices = [
-                separator_indices[0],
-                separator_indices[0] + 2,
-                separator_indices[1] + 2,
-                separator_indices[2] + 2
-            ]
-            changed = True
-        
-        if len(separator_indices) != 4:
-            if debug:
-                print(f"❌ Ошибка: найдено {len(separator_indices)} разделителей, нужно 4")
-            return changed, final_diff
-        
-        lines[separator_indices[0]] = '<<<<<<< SEARCH'
-        
-        lines[separator_indices[1]] = '-------'
-        search_block = [separator_indices[1]+1, separator_indices[2]-separator_indices[1]-1]
-        
-        lines[separator_indices[2]] = '======='
-        
-        try:
-            lines[separator_indices[3]] = '>>>>>>> REPLACE'
-        except Exception:
-            pass
-        
-        try:
-            j = separator_indices[3] - 1
-            while j > separator_indices[2] and not lines[j].strip():
-                del lines[j]
-                separator_indices[3] -= 1
-                j -= 1
-                changed = True
-        except Exception:
-            pass
-        
-        if data and data.get('content'):
-            file_content = data['content']
-            if search_block:
-                actual_line = self._find_search_block_line(file_content, lines, tuple(search_block))
-                if actual_line is not None:
-                    for idx, line in enumerate(lines):
-                        if line.strip().startswith(':start_line:'):
-                            lines[idx] = f':start_line:{actual_line}'
-                            changed = True
-                            break
-        
-        tc['function']['arguments']['diff'] = '\n'.join(lines)
-        final_diff = '\n'.join(lines)
-        
-        if changed:
-            self._was_changed = True
-        
-        return changed, final_diff
+            
+        except Exception as e:
+            self._log(f"Критическая ошибка в fix: {str(e)}", "ERROR")
+            self._dump_log_on_error()
+            raise
     
     def validate_diff_format(self, diff_lines: List[str]) -> Tuple[bool, List[str]]:
         """
@@ -640,6 +782,8 @@ class FixToolApplyDiff:
         
         if not diff_lines:
             errors.append("Diff пуст")
+            self._log("Diff пуст", "ERROR")
+            self._dump_log_on_error()
             return False, errors
         
         if diff_lines[0] != '<<<<<<< SEARCH':
@@ -669,8 +813,14 @@ class FixToolApplyDiff:
         if diff_lines[-1] != '>>>>>>> REPLACE':
             errors.append(f"Последняя строка: ожидается '>>>>>>> REPLACE', получено '{diff_lines[-1]}'")
         
+        if errors:
+            for error in errors:
+                self._log(f"Ошибка валидации: {error}", "ERROR")
+            self._dump_log_on_error()
+        
         return len(errors) == 0, errors
     
     def reset(self):
         """Сброс состояния"""
         self._was_changed = False
+        self._log_buffer.clear()
